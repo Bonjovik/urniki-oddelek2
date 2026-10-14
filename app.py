@@ -150,5 +150,8 @@ if st.button("🚀 Izračunaj urnik", type="primary", use_container_width=True):
             model.Add(dev >= target - total_hours)
             
             # Preferiramo, da Oddelek F dela nočne izmene
+           # Preferiramo, da Oddelek F dela nočne izmene
             if s["Oddelek"] == "Oddelek F":
-                penalty = model.NewIntVar(0,
+                penalty = model.NewIntVar(0, 10000, f'pen_{s["ID"]}')
+                model.Add(penalty == sum(work[(s["ID"], d, sh)] for d in range(num_days) for sh in ['D1', 'D3', 'D4']) * 100)
+                hour_deviations.append(penalty)
