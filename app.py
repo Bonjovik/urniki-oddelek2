@@ -49,7 +49,7 @@ edited_df = st.data_editor(
     },
     use_container_width=True
 )
-st.session_state.staff_df = edited_df
+
 
 if 'absences' not in st.session_state:
     st.session_state.absences = []
