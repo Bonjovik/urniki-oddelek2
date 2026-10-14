@@ -4,10 +4,10 @@ import calendar
 from datetime import date
 from ortools.sat.python import cp_model
 
-st.set_page_config(page_title="AI Urniki PRO 4.0", layout="wide")
+st.set_page_config(page_title="AI Urniki PRO 5.0", layout="wide")
 
-st.title("🏥 Centralni AI Sistem (Več oddelkov)")
-st.markdown("Prikaz ločenih tabel za Oddelek B, Oddelek H in Oddelek F.")
+st.title("🏥 Centralni AI Sistem (Verzija 5.0)")
+st.markdown("Popolnoma prilagodljive šifre (X4, X6, X7, N1, N2), vnos izjem in izbira nočnih delavcev.")
 
 # --- 1. KOLEDAR IN NASTAVITVE MESECA ---
 st.header("1. Izbira meseca in leta")
@@ -20,39 +20,40 @@ with col_date2:
 first_day_of_month_weekday, num_days = calendar.monthrange(leto, mesec)
 
 # --- 2. UPRAVLJANJE ZAPOSLENIH IN ODDELKOV ---
-st.header("2. Ekipa (Oddelek B, Oddelek H, Oddelek F)")
-st.info("💡 Oddelek F primarno služi kot bazen za nočne izmene, ki pokrivajo celotno enoto.")
+st.header("2. Ekipa in posebnosti")
+st.info("💡 Označi kljukico pri tistih, ki delajo nočne. Če izbereš 'Mutterschutz', bo delavka dobila izključno te ure.")
 
 if 'staff_df' not in st.session_state:
+    # Predizpolnjeno z generičnimi osebami za takojšen test!
     initial_staff = [
-        {"ID": 0, "Ime": "Vodja (Uroš)", "Oddelek": "Oddelek H", "Vloga": "Manager", "Tedenske_ure": 40.0},
-        {"ID": 1, "Ime": "DGKP Nočna", "Oddelek": "Oddelek F", "Vloga": "DGKP", "Tedenske_ure": 37.0},
-        {"ID": 2, "Ime": "DGKP 1 (Odd H)", "Oddelek": "Oddelek H", "Vloga": "DGKP", "Tedenske_ure": 37.0},
-        {"ID": 3, "Ime": "DGKP 1 (Odd B)", "Oddelek": "Oddelek B", "Vloga": "DGKP", "Tedenske_ure": 37.0},
-        {"ID": 4, "Ime": "DGKP 2 (Odd B)", "Oddelek": "Oddelek B", "Vloga": "DGKP", "Tedenske_ure": 37.0},
+        {"ID": 0, "Ime": "Oseba 1 (Vodja)", "Oddelek": "Oddelek H", "Vloga": "Manager", "Ure": 40.0, "Nocne": False, "Posebno": "Brez"},
+        {"ID": 1, "Ime": "Oseba 2 (Bazen)", "Oddelek": "Oddelek F", "Vloga": "DGKP", "Ure": 37.0, "Nocne": True, "Posebno": "Brez"},
+        {"ID": 2, "Ime": "Oseba 3 (SM izmena)", "Oddelek": "Oddelek H", "Vloga": "DGKP", "Ure": 37.0, "Nocne": False, "Posebno": "SM (7:45-18:15)"},
+        {"ID": 3, "Ime": "Oseba 4 (Odd B)", "Oddelek": "Oddelek B", "Vloga": "DGKP", "Ure": 37.0, "Nocne": False, "Posebno": "Brez"},
+        {"ID": 4, "Ime": "Oseba 5 (Noseča)", "Oddelek": "Oddelek B", "Vloga": "Tehnik", "Ure": 37.0, "Nocne": False, "Posebno": "Mutterschutz (7:30-15:00)"},
     ]
-    # Dodamo nekaj tehnikov
-    for i in range(1, 6):
-        initial_staff.append({"ID": len(initial_staff), "Ime": f"Tehnik B-{i}", "Oddelek": "Oddelek B", "Vloga": "Tehnik", "Tedenske_ure": 37.0})
-    for i in range(1, 6):
-        initial_staff.append({"ID": len(initial_staff), "Ime": f"Tehnik H-{i}", "Oddelek": "Oddelek H", "Vloga": "Tehnik", "Tedenske_ure": 37.0})
+    # Dodamo generične tehnike
+    for i in range(1, 5):
+        initial_staff.append({"ID": len(initial_staff), "Ime": f"Generični T-B{i}", "Oddelek": "Oddelek B", "Vloga": "Tehnik", "Ure": 37.0, "Nocne": True, "Posebno": "Brez"})
+    for i in range(1, 5):
+        initial_staff.append({"ID": len(initial_staff), "Ime": f"Generični T-H{i}", "Oddelek": "Oddelek H", "Vloga": "Tehnik", "Ure": 37.0, "Nocne": True, "Posebno": "Brez"})
     
     st.session_state.staff_df = pd.DataFrame(initial_staff)
 
 edited_df = st.data_editor(
     st.session_state.staff_df, 
     num_rows="dynamic",
-    key="urejanje_tabele", # <--- TA KLJUČ REŠI TEŽAVO S TIPKANJEM!
+    key="urejanje_tabele",
     column_config={
         "Oddelek": st.column_config.SelectboxColumn("Oddelek", options=["Oddelek B", "Oddelek H", "Oddelek F"], required=True),
         "Vloga": st.column_config.SelectboxColumn("Vloga", options=["Manager", "DGKP", "Tehnik"], required=True),
-        "Tedenske_ure": st.column_config.NumberColumn("Tedenske ure", min_value=10.0, max_value=40.0, required=True)
+        "Ure": st.column_config.NumberColumn("Tedenske ure", min_value=10.0, max_value=40.0, required=True),
+        "Nocne": st.column_config.CheckboxColumn("Dela nočne?", default=False),
+        "Posebno": st.column_config.SelectboxColumn("Posebni urnik", options=["Brez", "Mutterschutz (7:30-15:00)", "SM (7:45-18:15)"], required=True)
     },
     use_container_width=True
 )
-st.session_state.staff_df = edited_df # <--- TO VRNEMA, DA GUMB ZNA IZRAČUNATI!
-)
-
+st.session_state.staff_df = edited_df
 
 if 'absences' not in st.session_state:
     st.session_state.absences = []
@@ -66,7 +67,7 @@ with st.form("absence_form"):
     with col_f2:
         izbrani_datumi = st.multiselect("Izberi dneve v mesecu:", options=list(range(1, num_days + 1)))
     with col_f3:
-        reason = st.selectbox("Razlog:", ["DOP (Dopust)", "BOL (Bolniška)", "ROJ (Rojstni)", "ENT (Entlastung)"])
+        reason = st.selectbox("Razlog:", ["DOP (Dopust)", "BOL (Bolniška)", "ROJ", "ENT"])
     
     if st.form_submit_button("Shrani odsotnosti") and izbrani_datumi:
         emp_id = edited_df.loc[edited_df["Ime"] == emp_name, "ID"].values[0]
@@ -85,12 +86,23 @@ st.divider()
 
 # --- 4. GENERIRANJE URNIKA ---
 st.header("4. Avtomatska generacija")
-if st.button("🚀 Izračunaj urnik", type="primary", use_container_width=True):
+if st.button("🚀 Izračunaj urnik s šiframi", type="primary", use_container_width=True):
     staff_list = edited_df.to_dict('records')
     
-    with st.spinner("Preračunavam izmene po oddelkih..."):
+    with st.spinner("Preračunavam stroga pravila izmen in posebnosti..."):
         model = cp_model.CpModel()
-        shifts = {'D1': 1200, 'D3': 825, 'D4': 1100, 'N': 1350, 'OFF': 0}
+        
+        # NOVE ŠIFRE IN VREDNOSTI (ure * 100)
+        shifts = {
+            'X4': 825,   # do 15:30
+            'X6': 1100,  # do 18:15
+            'X7': 1200,  # do 19:15
+            'N1': 1350,  # Nočna DGKP (11.5 + 2)
+            'N2': 1350,  # Nočna Tehnik (11.5 + 2)
+            'MS': 700,   # Mutterschutz 7:30-15:00
+            'SM': 1000,  # SM 7:45-18:15
+            'OFF': 0
+        }
         
         work = {}
         for s in staff_list:
@@ -98,53 +110,89 @@ if st.button("🚀 Izračunaj urnik", type="primary", use_container_width=True):
                 for sh in shifts.keys():
                     work[(s["ID"], d, sh)] = model.NewBoolVar(f'work_{s["ID"]}_{d}_{sh}')
         
+        # Omejitev na točno eno izmeno na dan
         for s in staff_list:
             for d in range(num_days):
                 model.AddExactlyOne(work[(s["ID"], d, sh)] for sh in shifts.keys())
         
-        # Odsotnosti
+        # Odsotnosti in stroga pravila ZA VSAKEGA POSAMEZNIKA
+        for s in staff_list:
+            allowed_shifts = ['OFF']
+            
+            # Kaj lahko dela ta oseba?
+            if s["Posebno"] == "Mutterschutz (7:30-15:00)":
+                allowed_shifts.append('MS')
+            elif s["Posebno"] == "SM (7:45-18:15)":
+                allowed_shifts.append('SM')
+            elif s["Vloga"] == "Manager":
+                allowed_shifts.append('X4') # Manager dela X4
+            else:
+                allowed_shifts.extend(['X4', 'X6', 'X7']) # Navadne dnevne
+                
+                # Dodajanje nočnih samo tistim, ki imajo kljukico!
+                if s["Nocne"]:
+                    if s["Vloga"] == "DGKP":
+                        allowed_shifts.append('N1')
+                    elif s["Vloga"] == "Tehnik":
+                        allowed_shifts.append('N2')
+            
+            # Prepoved vseh ostalih izmen, ki niso v "allowed_shifts"
+            unallowed = [sh for sh in shifts.keys() if sh not in allowed_shifts]
+            for d in range(num_days):
+                for sh in unallowed:
+                    model.Add(work[(s["ID"], d, sh)] == 0)
+
+        # Uporaba dopustov (povozi vse)
         for a in st.session_state.absences:
             if a["day"] < num_days:
                 model.Add(work[(a["emp_id"], a["day"], 'OFF')] == 1)
 
-        # Kategorizacija po novih oddelkih
+        # Skupine za pravila
         oB_tehniki = [s["ID"] for s in staff_list if s["Oddelek"] == "Oddelek B" and s["Vloga"] == "Tehnik"]
         oH_tehniki = [s["ID"] for s in staff_list if s["Oddelek"] == "Oddelek H" and s["Vloga"] == "Tehnik"]
-        
-        oB_dgkp = [s["ID"] for s in staff_list if s["Oddelek"] == "Oddelek B" and s["Vloga"] in ["DGKP", "Manager"]]
-        oH_dgkp = [s["ID"] for s in staff_list if s["Oddelek"] == "Oddelek H" and s["Vloga"] in ["DGKP", "Manager"]]
-        
-        nocni_dgkp = [s["ID"] for s in staff_list if s["Vloga"] == "DGKP"] # Vsi DGKP vključno z Oddelkom F
+        all_dgkp = [s["ID"] for s in staff_list if s["Vloga"] in ["DGKP", "Manager"]]
+
+        day_shifts = ['X4', 'X6', 'X7', 'MS', 'SM']
 
         for d in range(num_days):
             day_of_week = (d + first_day_of_month_weekday) % 7
             
-            # --- DNEVNA IZMena ---
-            # Oddelek B (Pričakovanja: vsaj 1-2 DGKP in ustrezno število tehnikov)
-            if len(oB_dgkp) >= 1: model.Add(sum(work[(e, d, sh)] for e in oB_dgkp for sh in ['D1', 'D3', 'D4']) >= 1)
-            if len(oB_tehniki) >= 4: model.Add(sum(work[(e, d, sh)] for e in oB_tehniki for sh in ['D1', 'D3', 'D4']) >= 4)
+            # Manager ne dela vikendov
+            for s in staff_list:
+                if s["Vloga"] == "Manager" and day_of_week >= 5:
+                    model.Add(work[(s["ID"], d, 'OFF')] == 1)
+
+            # Minimalno pokritje
+            # Oddelek B (vsaj 2-3 tehniki in vsaj nekdo izmed DGKP)
+            if len(oB_tehniki) >= 3: model.Add(sum(work[(e, d, sh)] for e in oB_tehniki for sh in day_shifts) >= 3)
+            # Oddelek H
+            if len(oH_tehniki) >= 3: model.Add(sum(work[(e, d, sh)] for e in oH_tehniki for sh in day_shifts) >= 3)
             
-            # Oddelek H (Pričakovanja: vsaj 1 DGKP in ustrezno število tehnikov)
-            if len(oH_dgkp) >= 1: model.Add(sum(work[(e, d, sh)] for e in oH_dgkp for sh in ['D1', 'D3', 'D4']) >= 1)
-            if len(oH_tehniki) >= 3: model.Add(sum(work[(e, d, sh)] for e in oH_tehniki for sh in ['D1', 'D3', 'D4']) >= 3)
+            # Nočne
+            # Vsako noč točno 1 DGKP na N1
+            dgkp_nocni = [s["ID"] for s in staff_list if s["Vloga"] == "DGKP" and s["Nocne"]]
+            if len(dgkp_nocni) > 0: model.Add(sum(work[(e, d, 'N1')] for e in dgkp_nocni) == 1)
             
-            # --- NOČNA IZMena ---
-            # 1 DGKP za celotno področje
-            if len(nocni_dgkp) > 0: model.Add(sum(work[(e, d, 'N')] for e in nocni_dgkp) == 1)
+            # Vsako noč 1 tehnik na Odd B in 1 na Odd H na N2
+            tech_nocni_B = [s["ID"] for s in staff_list if s["Oddelek"] == "Oddelek B" and s["Vloga"] == "Tehnik" and s["Nocne"]]
+            if len(tech_nocni_B) > 0: model.Add(sum(work[(e, d, 'N2')] for e in tech_nocni_B) == 1)
             
-            # 1 Tehnik iz Oddelka B in 1 Tehnik iz Oddelka H v nočni izmeni
-            if len(oB_tehniki) > 0: model.Add(sum(work[(e, d, 'N')] for e in oB_tehniki) == 1)
-            if len(oH_tehniki) > 0: model.Add(sum(work[(e, d, 'N')] for e in oH_tehniki) == 1)
+            tech_nocni_H = [s["ID"] for s in staff_list if s["Oddelek"] == "Oddelek H" and s["Vloga"] == "Tehnik" and s["Nocne"]]
+            if len(tech_nocni_H) > 0: model.Add(sum(work[(e, d, 'N2')] for e in tech_nocni_H) == 1)
             
+            # Predaja do 19:15 (X7) - Vsaj en DGKP mora imeti izmeno X7!
+            if len(all_dgkp) > 0: model.Add(sum(work[(e, d, 'X7')] for e in all_dgkp) >= 1)
+
         # Počitek po nočni
         for s in staff_list:
             for d in range(num_days - 1):
-                model.AddImplication(work[(s["ID"], d, 'N')], work[(s["ID"], d + 1, 'OFF')])
+                model.AddImplication(work[(s["ID"], d, 'N1')], work[(s["ID"], d + 1, 'OFF')])
+                model.AddImplication(work[(s["ID"], d, 'N2')], work[(s["ID"], d + 1, 'OFF')])
 
-        # MEHKE OMEJITVE (Prekoračitve)
+        # Prilagoditev ur
         hour_deviations = []
         for s in staff_list:
-            target = int((s["Tedenske_ure"] / 7.0) * num_days * 100)
+            target = int((s["Ure"] / 7.0) * num_days * 100)
             total_hours = model.NewIntVar(0, 35000, f'tot_{s["ID"]}')
             model.Add(total_hours == sum(work[(s["ID"], d, sh)] * shifts[sh] for d in range(num_days) for sh in shifts.keys()))
             
@@ -152,9 +200,56 @@ if st.button("🚀 Izračunaj urnik", type="primary", use_container_width=True):
             model.Add(dev >= total_hours - target)
             model.Add(dev >= target - total_hours)
             
-            # Preferiramo, da Oddelek F dela nočne izmene
-           # Preferiramo, da Oddelek F dela nočne izmene
-            if s["Oddelek"] == "Oddelek F":
-                penalty = model.NewIntVar(0, 10000, f'pen_{s["ID"]}')
-                model.Add(penalty == sum(work[(s["ID"], d, sh)] for d in range(num_days) for sh in ['D1', 'D3', 'D4']) * 100)
-                hour_deviations.append(penalty)
+            hour_deviations.append(dev)
+
+        model.Minimize(sum(hour_deviations))
+        solver = cp_model.CpSolver()
+        solver.parameters.max_time_in_seconds = 45.0
+        status = solver.Solve(model)
+
+        if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
+            st.success("🎉 Urnik s specifičnimi kodami je zgeneriran!")
+            
+            data = []
+            for s in staff_list:
+                row = {"Oddelek": s["Oddelek"], "Vloga": s["Vloga"], "Zaposleni": s["Ime"]}
+                total_hours = 0
+                for d in range(num_days):
+                    for sh in shifts.keys():
+                        if solver.Value(work[(s["ID"], d, sh)]) == 1:
+                            val = sh if sh != 'OFF' else '...'
+                            for a in st.session_state.absences:
+                                if a["emp_id"] == s["ID"] and a["day"] == d:
+                                    val = a["reason"].split(" ")[0]
+                            row[f"{d+1}."] = val
+                            total_hours += shifts[sh]
+                
+                target_hrs = (s["Ure"] / 7.0) * num_days
+                row["FOND"] = round(target_hrs, 1)
+                row["PLANIRANO"] = total_hours / 100
+                row["RAZLIKA"] = round((total_hours / 100) - target_hrs, 1)
+                data.append(row)
+            
+            df_rezultat = pd.DataFrame(data)
+            
+            def highlight_hours(val):
+                if isinstance(val, (int, float)):
+                    if val > 12: return 'background-color: #ffcccc; color: #990000; font-weight: bold'
+                    elif val < -12: return 'background-color: #ccccff; color: #000099; font-weight: bold'
+                return ''
+            
+            # --- PRIKAZ V LOČENIH TABELAH ---
+            st.subheader("🔵 Oddelek B")
+            df_b = df_rezultat[df_rezultat["Oddelek"] == "Oddelek B"].drop(columns=["Oddelek"])
+            st.dataframe(df_b.style.applymap(highlight_hours, subset=['RAZLIKA']), use_container_width=True)
+            
+            st.subheader("🟢 Oddelek H")
+            df_h = df_rezultat[df_rezultat["Oddelek"] == "Oddelek H"].drop(columns=["Oddelek"])
+            st.dataframe(df_h.style.applymap(highlight_hours, subset=['RAZLIKA']), use_container_width=True)
+            
+            st.subheader("🟣 Oddelek F (Nočni bazen)")
+            df_f = df_rezultat[df_rezultat["Oddelek"] == "Oddelek F"].drop(columns=["Oddelek"])
+            st.dataframe(df_f.style.applymap(highlight_hours, subset=['RAZLIKA']), use_container_width=True)
+            
+        else:
+            st.error("🚨 Sistem ni našel rešitve. Preveri, ali si določil dovolj ljudi s kljukico 'Dela nočne'!")
