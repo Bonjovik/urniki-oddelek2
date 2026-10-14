@@ -4,10 +4,10 @@ import calendar
 from datetime import date
 from ortools.sat.python import cp_model
 
-st.set_page_config(page_title="AI Urniki PRO 5.2", layout="wide")
+st.set_page_config(page_title="AI Urniki PRO 5.3", layout="wide")
 
-st.title("🏥 Centralni AI Sistem (40 zaposlenih)")
-st.markdown("Gladko vnašanje, prilagodljive šifre (X4, X6, X7, N1, N2) in popolna stabilnost.")
+st.title("🏥 Centralni AI Sistem (Verzija 5.3 - Turbo)")
+st.markdown("Optimizirano za 40 zaposlenih z instantnim izračunom in nadzorom napak.")
 
 # --- 1. KOLEDAR IN NASTAVITVE MESECA ---
 st.header("1. Izbira meseca in leta")
@@ -21,12 +21,11 @@ first_day_of_month_weekday, num_days = calendar.monthrange(leto, mesec)
 
 # --- 2. UPRAVLJANJE ZAPOSLENIH IN ODDELKOV ---
 st.header("2. Ekipa (Prednastavljenih 40 oseb)")
-st.info("💡 Tipkanje sedaj deluje gladko. Prepiši generična imena in označi kljukice za nočne.")
 
 if 'staff_df' not in st.session_state:
     initial_staff = []
     
-    initial_staff.append({"ID": len(initial_staff), "Ime": "Vodja (Uroš)", "Oddelek": "Oddelek H", "Vloga": "Manager", "Ure": 40.0, "Nocne": False, "Posebno": "Brez"})
+    initial_staff.append({"ID": 0, "Ime": "Vodja (Uroš)", "Oddelek": "Oddelek H", "Vloga": "Manager", "Ure": 40.0, "Nocne": False, "Posebno": "Brez"})
     
     for i in range(1, 4):
         initial_staff.append({"ID": len(initial_staff), "Ime": f"DGKP F-{i} (Bazen)", "Oddelek": "Oddelek F", "Vloga": "DGKP", "Ure": 37.0, "Nocne": True, "Posebno": "Brez"})
@@ -47,7 +46,6 @@ if 'staff_df' not in st.session_state:
     
     st.session_state.staff_df = pd.DataFrame(initial_staff)
 
-# Prikaz tabele (odstranjena problematična vrstica za prepisovanje spomina)
 edited_df = st.data_editor(
     st.session_state.staff_df, 
     num_rows="dynamic",
@@ -96,65 +94,147 @@ st.header("4. Avtomatska generacija")
 if st.button("🚀 Izračunaj urnik s šiframi", type="primary", use_container_width=True):
     staff_list = edited_df.to_dict('records')
     
-    with st.spinner("Preračunavam stroga pravila izmen za 40 zaposlenih (lahko traja 30-45 sekund)..."):
-        model = cp_model.CpModel()
-        
-        # ŠIFRE IN VREDNOSTI (ure * 100)
-        shifts = {
-            'X4': 825,   
-            'X6': 1100,  
-            'X7': 1200,  
-            'N1': 1350,  
-            'N2': 1350,  
-            'MS': 700,   
-            'SM': 1000,  
-            'OFF': 0
-        }
-        
-        work = {}
-        for s in staff_list:
-            for d in range(num_days):
-                for sh in shifts.keys():
-                    work[(s["ID"], d, sh)] = model.NewBoolVar(f'work_{s["ID"]}_{d}_{sh}')
-        
-        # POPRAVLJENA NAPAKA: Klasičen način seštevanja namesto AddExactlyOne
-        for s in staff_list:
-            for d in range(num_days):
-                model.Add(sum(work[(s["ID"], d, sh)] for sh in shifts.keys()) == 1)
-        
-        # Omejitve posameznika
-        for s in staff_list:
-            allowed_shifts = ['OFF']
+    try:
+        with st.spinner("Hitri izračun za 40 zaposlenih poteka (cca 5 sekund)..."):
+            model = cp_model.CpModel()
             
-            if s["Posebno"] == "Mutterschutz (7:30-15:00)":
-                allowed_shifts.append('MS')
-            elif s["Posebno"] == "SM (7:45-18:15)":
-                allowed_shifts.append('SM')
-            elif s["Vloga"] == "Manager":
-                allowed_shifts.append('X4') 
+            # ŠIFRE IN VREDNOSTI (ure * 100)
+            shifts = {'X4': 825, 'X6': 1100, 'X7': 1200, 'N1': 1350, 'N2': 1350, 'MS': 700, 'SM': 1000, 'OFF': 0}
+            
+            work = {}
+            for s in staff_list:
+                for d in range(num_days):
+                    for sh in shifts.keys():
+                        work[(s["ID"], d, sh)] = model.NewBoolVar(f'work_{s["ID"]}_{d}_{sh}')
+            
+            # 1 izmena na dan
+            for s in staff_list:
+                for d in range(num_days):
+                    model.Add(sum(work[(s["ID"], d, sh)] for sh in shifts.keys()) == 1)
+            
+            # Omejitve posameznika
+            for s in staff_list:
+                allowed_shifts = ['OFF']
+                if s["Posebno"] == "Mutterschutz (7:30-15:00)":
+                    allowed_shifts.append('MS')
+                elif s["Posebno"] == "SM (7:45-18:15)":
+                    allowed_shifts.append('SM')
+                elif s["Vloga"] == "Manager":
+                    allowed_shifts.append('X4') 
+                else:
+                    allowed_shifts.extend(['X4', 'X6', 'X7']) 
+                    if s["Nocne"]:
+                        if s["Vloga"] == "DGKP":
+                            allowed_shifts.append('N1')
+                        elif s["Vloga"] == "Tehnik":
+                            allowed_shifts.append('N2')
+                
+                unallowed = [sh for sh in shifts.keys() if sh not in allowed_shifts]
+                for d in range(num_days):
+                    for sh in unallowed:
+                        model.Add(work[(s["ID"], d, sh)] == 0)
+
+            # Dopusti
+            for a in st.session_state.absences:
+                if a["day"] < num_days:
+                    model.Add(work[(a["emp_id"], a["day"], 'OFF')] == 1)
+
+            oB_tehniki = [s["ID"] for s in staff_list if s["Oddelek"] == "Oddelek B" and s["Vloga"] == "Tehnik"]
+            oH_tehniki = [s["ID"] for s in staff_list if s["Oddelek"] == "Oddelek H" and s["Vloga"] == "Tehnik"]
+            all_dgkp = [s["ID"] for s in staff_list if s["Vloga"] in ["DGKP", "Manager"]]
+
+            day_shifts = ['X4', 'X6', 'X7', 'MS', 'SM']
+
+            for d in range(num_days):
+                day_of_week = (d + first_day_of_month_weekday) % 7
+                
+                for s in staff_list:
+                    if s["Vloga"] == "Manager" and day_of_week >= 5:
+                        model.Add(work[(s["ID"], d, 'OFF')] == 1)
+
+                # Pokritje podnevi 
+                if len(oB_tehniki) >= 3: model.Add(sum(work[(e, d, sh)] for e in oB_tehniki for sh in day_shifts) >= 4)
+                if len(oH_tehniki) >= 3: model.Add(sum(work[(e, d, sh)] for e in oH_tehniki for sh in day_shifts) >= 4)
+                
+                # Nočne
+                dgkp_nocni = [s["ID"] for s in staff_list if s["Vloga"] == "DGKP" and s["Nocne"]]
+                if len(dgkp_nocni) > 0: model.Add(sum(work[(e, d, 'N1')] for e in dgkp_nocni) == 1)
+                
+                tech_nocni_B = [s["ID"] for s in staff_list if s["Oddelek"] == "Oddelek B" and s["Vloga"] == "Tehnik" and s["Nocne"]]
+                if len(tech_nocni_B) > 0: model.Add(sum(work[(e, d, 'N2')] for e in tech_nocni_B) == 1)
+                
+                tech_nocni_H = [s["ID"] for s in staff_list if s["Oddelek"] == "Oddelek H" and s["Vloga"] == "Tehnik" and s["Nocne"]]
+                if len(tech_nocni_H) > 0: model.Add(sum(work[(e, d, 'N2')] for e in tech_nocni_H) == 1)
+                
+                # Predaja
+                if len(all_dgkp) > 0: model.Add(sum(work[(e, d, 'X7')] for e in all_dgkp) >= 1)
+
+            # Počitek po nočni
+            for s in staff_list:
+                for d in range(num_days - 1):
+                    model.AddImplication(work[(s["ID"], d, 'N1')], work[(s["ID"], d + 1, 'OFF')])
+                    model.AddImplication(work[(s["ID"], d, 'N2')], work[(s["ID"], d + 1, 'OFF')])
+
+            # HITRI NAČIN (Brez zamrznitve) - Odstopanje ur dovoljeno za +/- 30 ur
+            for s in staff_list:
+                target = int((s["Ure"] / 7.0) * num_days * 100)
+                total_hours = model.NewIntVar(0, 35000, f'tot_{s["ID"]}')
+                model.Add(total_hours == sum(work[(s["ID"], d, sh)] * shifts[sh] for d in range(num_days) for sh in shifts.keys()))
+                
+                min_h = max(0, target - 3000)
+                model.Add(total_hours >= min_h)
+                model.Add(total_hours <= target + 3000)
+
+            solver = cp_model.CpSolver()
+            solver.parameters.max_time_in_seconds = 15.0 # Prekine po 15 sekundah
+            status = solver.Solve(model)
+
+            if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
+                st.success("🎉 Urnik je bil uspešno in hitro zgeneriran!")
+                
+                data = []
+                for s in staff_list:
+                    row = {"Oddelek": s["Oddelek"], "Vloga": s["Vloga"], "Zaposleni": s["Ime"]}
+                    total_hours = 0
+                    for d in range(num_days):
+                        for sh in shifts.keys():
+                            if solver.Value(work[(s["ID"], d, sh)]) == 1:
+                                val = sh if sh != 'OFF' else '...'
+                                for a in st.session_state.absences:
+                                    if a["emp_id"] == s["ID"] and a["day"] == d:
+                                        val = a["reason"].split(" ")[0]
+                                row[f"{d+1}."] = val
+                                total_hours += shifts[sh]
+                    
+                    target_hrs = (s["Ure"] / 7.0) * num_days
+                    row["FOND"] = round(target_hrs, 1)
+                    row["PLANIRANO"] = total_hours / 100
+                    row["RAZLIKA"] = round((total_hours / 100) - target_hrs, 1)
+                    data.append(row)
+                
+                df_rezultat = pd.DataFrame(data)
+                
+                def highlight_hours(val):
+                    if isinstance(val, (int, float)):
+                        if val > 12: return 'background-color: #ffcccc; color: #990000; font-weight: bold'
+                        elif val < -12: return 'background-color: #ccccff; color: #000099; font-weight: bold'
+                    return ''
+                
+                st.subheader("🔵 Oddelek B")
+                df_b = df_rezultat[df_rezultat["Oddelek"] == "Oddelek B"].drop(columns=["Oddelek"])
+                st.dataframe(df_b.style.applymap(highlight_hours, subset=['RAZLIKA']), use_container_width=True)
+                
+                st.subheader("🟢 Oddelek H")
+                df_h = df_rezultat[df_rezultat["Oddelek"] == "Oddelek H"].drop(columns=["Oddelek"])
+                st.dataframe(df_h.style.applymap(highlight_hours, subset=['RAZLIKA']), use_container_width=True)
+                
+                st.subheader("🟣 Oddelek F (Nočni bazen)")
+                df_f = df_rezultat[df_rezultat["Oddelek"] == "Oddelek F"].drop(columns=["Oddelek"])
+                st.dataframe(df_f.style.applymap(highlight_hours, subset=['RAZLIKA']), use_container_width=True)
+                
             else:
-                allowed_shifts.extend(['X4', 'X6', 'X7']) 
-                if s["Nocne"]:
-                    if s["Vloga"] == "DGKP":
-                        allowed_shifts.append('N1')
-                    elif s["Vloga"] == "Tehnik":
-                        allowed_shifts.append('N2')
-            
-            unallowed = [sh for sh in shifts.keys() if sh not in allowed_shifts]
-            for d in range(num_days):
-                for sh in unallowed:
-                    model.Add(work[(s["ID"], d, sh)] == 0)
-
-        # Dopusti
-        for a in st.session_state.absences:
-            if a["day"] < num_days:
-                model.Add(work[(a["emp_id"], a["day"], 'OFF')] == 1)
-
-        oB_tehniki = [s["ID"] for s in staff_list if s["Oddelek"] == "Oddelek B" and s["Vloga"] == "Tehnik"]
-        oH_tehniki = [s["ID"] for s in staff_list if s["Oddelek"] == "Oddelek H" and s["Vloga"] == "Tehnik"]
-        all_dgkp = [s["ID"] for s in staff_list if s["Vloga"] in ["DGKP", "Manager"]]
-
-        day_shifts = ['X4', 'X6', 'X7', 'MS', 'SM']
-
-        for d in range(num_days):
-            day_of_week = (d + first_day_of_month_weekday) % 7
+                st.error("🚨 Sistem ni našel rešitve v 15 sekundah. Verjetno si planiral preveč dopustov in zmanjka ljudi za minimum, ali pa imajo izbrani napačne kljukice za nočno.")
+    
+    except Exception as e:
+        # ČE PRIDE DO SKRITE NAPAKE, TI JO BO SEDAJ NAPISALO TUKAJ!
+        st.error(f"⚠️ Sistemska napaka: {e}")
