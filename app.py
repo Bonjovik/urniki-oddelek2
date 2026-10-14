@@ -42,12 +42,15 @@ if 'staff_df' not in st.session_state:
 edited_df = st.data_editor(
     st.session_state.staff_df, 
     num_rows="dynamic",
+    key="urejanje_tabele", # <--- TA KLJUČ REŠI TEŽAVO S TIPKANJEM!
     column_config={
         "Oddelek": st.column_config.SelectboxColumn("Oddelek", options=["Oddelek B", "Oddelek H", "Oddelek F"], required=True),
         "Vloga": st.column_config.SelectboxColumn("Vloga", options=["Manager", "DGKP", "Tehnik"], required=True),
         "Tedenske_ure": st.column_config.NumberColumn("Tedenske ure", min_value=10.0, max_value=40.0, required=True)
     },
     use_container_width=True
+)
+st.session_state.staff_df = edited_df # <--- TO VRNEMA, DA GUMB ZNA IZRAČUNATI!
 )
 
 
