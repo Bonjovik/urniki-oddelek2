@@ -122,82 +122,19 @@ if st.button("🚀 Izračunaj zakonit urnik", type="primary", use_container_widt
                 else:
                     model.Add(work[(mid, d, 'D3')] == 1)
 
-        # Pokritje
+       # Pokritje
         for d in range(num_days):
-            model.Add(sum(work[(e, d, sh)] for e in manager_ids + dgkp_ids for sh in ['D1', 'D3', 'D4']) == 1)
+            # 1. Vsaj 1 vodja ALI diplomirana mora biti v dnevni izmeni (dovoli, da ste prisotni hkrati)
+            model.Add(sum(work[(e, d, sh)] for e in manager_ids + dgkp_ids for sh in ['D1', 'D3', 'D4']) >= 1)
+            
+            # 2. Točno 4 Tehniki na dnevni izmeni
             model.Add(sum(work[(e, d, sh)] for e in tehnik_ids for sh in ['D1', 'D3', 'D4']) == 4)
-            if dgkp_ids: model.Add(sum(work[(e, d, 'N')] for e in dgkp_ids) == 1)
+            
+            # 3. Nočna za DGKP (ni obvezno vsako noč z vašega oddelka, lahko je 0 ali 1)
+            if dgkp_ids: model.Add(sum(work[(e, d, 'N')] for e in dgkp_ids) <= 1)
+            
+            # 4. Nočna za tehnike (vedno točno 1 tehnik)
             if tehnik_ids: model.Add(sum(work[(e, d, 'N')] for e in tehnik_ids) == 1)
-            # Predaja 19:15
+            
+            # 5. Pravilo 19:15 predaje (vsaj nekdo izmed DGKP mora podaljšati do 19:15)
             model.Add(sum(work[(e, d, 'D1')] for e in manager_ids + dgkp_ids) >= 1)
-
-        # Počitek po nočni
-        for s in staff_list:
-            for d in range(num_days - 1):
-                model.AddImplication(work[(s["ID"], d, 'N')], work[(s["ID"], d + 1, 'OFF')])
-
-        # Ciljne ure glede na zaposlitev
-        hour_deviations = []
-        for s in staff_list:
-            # Izračun ciljnih ur: (tedenske ure / 7 dni) * število dni v mesecu
-            # Npr. (37 / 7) * 30 = 158.5 ur. Množimo s 100 za matematiko v kodi.
-            target = int((s["Tedenske_ure"] / 7.0) * num_days * 100)
-            
-            total_hours = model.NewIntVar(0, 35000, f'tot_{s["ID"]}')
-            model.Add(total_hours == sum(work[(s["ID"], d, sh)] * shifts[sh] for d in range(num_days) for sh in shifts.keys()))
-            
-            dev = model.NewIntVar(0, 15000, f'dev_{s["ID"]}')
-            model.Add(dev >= total_hours - target)
-            model.Add(dev >= target - total_hours)
-            hour_deviations.append(dev)
-
-        # Želimo čim manjša odstopanja od ciljnih ur vseh delavcev
-        model.Minimize(sum(hour_deviations))
-
-        solver = cp_model.CpSolver()
-        solver.parameters.max_time_in_seconds = 30.0
-        status = solver.Solve(model)
-
-        if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
-            st.success("🎉 Urnik uspešno zgeneriran!")
-            
-            data = []
-            for s in staff_list:
-                row = {"Vloga": s["Vloga"], "Zaposleni": s["Ime"]}
-                total_hours = 0
-                for d in range(num_days):
-                    for sh in shifts.keys():
-                        if solver.Value(work[(s["ID"], d, sh)]) == 1:
-                            val = sh if sh != 'OFF' else 'X'
-                            for a in st.session_state.absences:
-                                if a["emp_id"] == s["ID"] and a["day"] == d:
-                                    val = a["reason"].split(" ")[0]
-                            row[f"{d+1}."] = val
-                            total_hours += shifts[sh]
-                
-                target_hrs = (s["Tedenske_ure"] / 7.0) * num_days
-                row["FOND UR"] = round(target_hrs, 1)
-                row["PLANIRANO"] = total_hours / 100
-                row["RAZLIKA"] = round((total_hours / 100) - target_hrs, 1)
-                data.append(row)
-            
-            df_rezultat = pd.DataFrame(data)
-            
-            # Barvanje razlik (preveč/premalo ur)
-            def color_diff(val):
-                if isinstance(val, (int, float)):
-                    if val > 10: return 'background-color: #ffcccc; color: black'
-                    elif val < -10: return 'background-color: #ccccff; color: black'
-                return ''
-            
-            st.dataframe(df_rezultat.style.applymap(color_diff, subset=['RAZLIKA']), use_container_width=True)
-            
-            csv = df_rezultat.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="📥 Prenesi urnik za Geocon (CSV)",
-                data=csv,
-                file_name='napredni_urnik_oddelek2.csv',
-                mime='text/csv',
-            )
-        else:
-            st.error("🚨 Sistem ni našel možne rešitve. Verjetno si planiral preveč dopustov in zmanjka kadra za dnevni minimum! Zmanjšaj število odsotnosti ali dodaj delavce v tabelo.")
