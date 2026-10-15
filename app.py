@@ -5,9 +5,9 @@ from ortools.sat.python import cp_model
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="KI-Dienstplan PRO 10.0", layout="wide")
+st.set_page_config(page_title="KI-Dienstplan PRO 10.1", layout="wide")
 
-st.title("🏥 KI-Dienstplan System (Version 10.0 - Ultimate)")
+st.title("🏥 KI-Dienstplan System (Version 10.1 - Ultimate)")
 st.markdown(
     "Inkl. **Steirische Feiertage**, **Saldo Alt (Stundenübertrag)**, "
     "**SBAR-Übergabe-Leitung (\*)** und **SOS-Ausfallmanagement**."
@@ -34,8 +34,8 @@ with tab1:
 
     first_day_of_month_weekday, num_days = calendar.monthrange(leto, mesec)
     
-    # Pridobi avstrijske praznike (Štajerska)
-    at_holidays = holidays.Austria(years=leto, prov='ST')
+    # Pridobi avstrijske praznike (Štajerska - koda 6)
+    at_holidays = holidays.Austria(years=leto, subdiv='6')
 
     # --- 2. UPRAVLJANJE ZAPOSLENIH IN ODDELKOV ---
     st.header("Team (Stundenübertrag und %-Anstellung)")
@@ -348,130 +348,4 @@ with tab2:
                     feiertags_stunden = 0
                     for d in range(num_days):
                         if date(leto, mesec, d+1) in at_holidays:
-                            dow = (d + first_day_of_month_weekday) % 7
-                            if dow < 5: # Če pade praznik na pon-pet, zmanjša fond
-                                feiertags_stunden += (37.0 * (s["Prozent"] / 100.0) / 5.0)
-
-                    saldo_alt = float(s.get("Saldo_Alt", 0.0))
-                    # Optimiziran fond: Če ima preveč ur (Saldo+), mora ta mesec delati MANJ.
-                    adjusted_target = max(0, int((standard_target - feiertags_stunden - saldo_alt) * 100))
-                    
-                    total_hours = model.NewIntVar(0, 35000, f'tot_{s["ID"]}')
-                    model.Add(total_hours == sum(work[(s["ID"], d, sh)] * shifts[sh] for d in range(num_days) for sh in shifts.keys()))
-
-                    dev = model.NewIntVar(0, 20000, f'dev_{s["ID"]}')
-                    model.Add(dev >= total_hours - adjusted_target)
-                    model.Add(dev >= adjusted_target - total_hours)
-                    hour_deviations.append(dev)
-
-                    min_h = max(0, adjusted_target - 3500)
-                    model.Add(total_hours >= min_h)
-                    model.Add(total_hours <= adjusted_target + 3500)
-
-                model.Minimize(sum(hour_deviations))
-                solver = cp_model.CpSolver()
-                solver.parameters.max_time_in_seconds = 20.0
-                status = solver.Solve(model)
-
-                if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
-                    st.success("🎉 Dienstplan erfolgreich generiert!")
-
-                    data = []
-                    for s in staff_list:
-                        row = {"Abteilung": s["Abteilung"], "Rolle": s["Rolle"], "Mitarbeiter": s["Name"]}
-                        total_hours = 0
-                        for d in range(num_days):
-                            day_str = f"{d+1}."
-                            if date(leto, mesec, d+1) in at_holidays:
-                                day_str = f"{d+1}. (FT)" # Označimo praznik!
-                            
-                            val = "..."
-                            for sh in shifts.keys():
-                                if solver.Value(work[(s["ID"], d, sh)]) == 1:
-                                    val = sh if sh != "OFF" else "..."
-                                    for a in st.session_state.absences_v10:
-                                        if a["emp_id"] == s["ID"] and a["day"] == d:
-                                            val = a["reason"].split(" ")[0] 
-                                    total_hours += shifts[sh]
-                            row[day_str] = val
-
-                        # Matematika na koncu
-                        standard_target = (37.0 * (s["Prozent"] / 100.0) / 7.0) * num_days
-                        feiertags_stunden = sum((37.0 * (s["Prozent"] / 100.0) / 5.0) for d in range(num_days) if date(leto, mesec, d+1) in at_holidays and (d + first_day_of_month_weekday) % 7 < 5)
-                        
-                        soll_neu = standard_target - feiertags_stunden
-                        saldo_alt = float(s.get("Saldo_Alt", 0.0))
-                        
-                        row["SOLL (FT abg.)"] = round(soll_neu, 1)
-                        row["IST"] = total_hours / 100
-                        row["SALDO NEU"] = round((total_hours / 100) - soll_neu + saldo_alt, 1)
-                        data.append(row)
-
-                    df_rezultat = pd.DataFrame(data)
-
-                    # --- SBAR PREDELA (DODAJANJE ZVEZDICE *) ---
-                    day_cols = [c for c in df_rezultat.columns if "." in c]
-                    for d_col in day_cols:
-                        dgkp_rows = df_rezultat[(df_rezultat["Rolle"].isin(["DGKP", "Leitung"])) & (df_rezultat[d_col] == "X7")]
-                        if not dgkp_rows.empty:
-                            df_rezultat.at[dgkp_rows.index[0], d_col] = "*X7"
-                        else:
-                            # Če ni X7, mogoče X6 vodi SBAR
-                            dgkp_rows_x6 = df_rezultat[(df_rezultat["Rolle"].isin(["DGKP", "Leitung"])) & (df_rezultat[d_col] == "X6")]
-                            if not dgkp_rows_x6.empty:
-                                df_rezultat.at[dgkp_rows_x6.index[0], d_col] = "*X6"
-
-                    st.session_state.last_generated_df = df_rezultat # Shranimo za SOS modul
-
-                    def highlight_hours(val):
-                        if isinstance(val, (int, float)):
-                            if val > 12: return "background-color: #ffcccc; color: #990000; font-weight: bold"
-                            elif val < -12: return "background-color: #ccccff; color: #000099; font-weight: bold"
-                        return ""
-
-                    st.subheader("🔵 Abteilung B")
-                    df_b = df_rezultat[df_rezultat["Abteilung"] == "Abteilung B"].drop(columns=["Abteilung"])
-                    st.dataframe(df_b.style.map(highlight_hours, subset=["SALDO NEU"]), use_container_width=True)
-
-                    st.subheader("🟢 Abteilung H")
-                    df_h = df_rezultat[df_rezultat["Abteilung"] == "Abteilung H"].drop(columns=["Abteilung"])
-                    st.dataframe(df_h.style.map(highlight_hours, subset=["SALDO NEU"]), use_container_width=True)
-
-                    st.subheader("🟣 Abteilung F (Nacht-Pool)")
-                    df_f = df_rezultat[df_rezultat["Abteilung"] == "Abteilung F"].drop(columns=["Abteilung"])
-                    st.dataframe(df_f.style.map(highlight_hours, subset=["SALDO NEU"]), use_container_width=True)
-
-                else:
-                    st.error("🚨 Keine Lösung! Zu viele Einschränkungen.")
-        except Exception as e:
-            st.error(f"⚠️ Systemfehler: {e}")
-
-with tab3:
-    st.header("🚑 SOS Ausfallmanagement")
-    st.markdown("Fällt jemand kurzfristig aus? Finde sofort den perfekten Ersatz!")
-    
-    if "last_generated_df" in st.session_state:
-        df_sos = st.session_state.last_generated_df
-        sos_day = st.selectbox("1. Welcher Tag ist betroffen?", [c for c in df_sos.columns if "." in c])
-        sos_person = st.selectbox("2. Wer ist krank (KRA)?", df_sos["Mitarbeiter"].tolist())
-        
-        if st.button("🔍 Ersatz suchen"):
-            # Ugotovi vlogo bolne osebe
-            sick_role = df_sos[df_sos["Mitarbeiter"] == sos_person]["Rolle"].values[0]
-            st.warning(f"{sos_person} ({sick_role}) fällt am {sos_day} aus.")
-            
-            # Najdi kandidate: Ista vloga, tisti dan imajo prosto ("..."), in imajo najnižji Saldo
-            candidates = df_sos[
-                (df_sos["Rolle"] == sick_role) & 
-                (df_sos[sos_day] == "...") & 
-                (df_sos["Mitarbeiter"] != sos_person)
-            ].sort_values(by="SALDO NEU")
-            
-            if not candidates.empty:
-                st.success(f"✅ {len(candidates)} mögliche Ersatzpersonen gefunden (Sortiert nach Minus-Stunden):")
-                st.dataframe(candidates[["Mitarbeiter", "Abteilung", "SALDO NEU"]], use_container_width=True)
-                st.info("💡 Die Personen ganz oben haben Minus-Stunden und würden sich über den Dienst freuen!")
-            else:
-                st.error("❌ Niemand mit dieser Rolle hat an diesem Tag frei. Du musst jemanden aus dem Urlaub/ENT holen oder Leihpersonal anfordern.")
-    else:
-        st.info("⚠️ Bitte generiere zuerst den Dienstplan im Tab 2.")
+                            dow = (d +
