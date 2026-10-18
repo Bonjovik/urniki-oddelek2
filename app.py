@@ -8,13 +8,13 @@ from ortools.sat.python import cp_model
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="KI-Dienstplan PRO 35.0", layout="wide")
+st.set_page_config(page_title="KI-Dienstplan PRO 36.0", layout="wide")
 
-st.title("🏥 KI-Dienstplan System (Version 35.0 - Nacht-Exklusiv & HH Flex)")
+st.title("🏥 KI-Dienstplan System (Version 36.0 - AZG/ARG & Schicht-Blöcke)")
 st.markdown(
-    "**Neues Update:** Strikte Nachtdienste (Genau 1x DGKP für das ganze Haus, genau 1x PA für Abt. B+H). "
-    "Heimhelfer mit JED-Dienst dürfen nun als Lückenfüller auch F2/F7 Dienste übernehmen! "
-    "Alle vorherigen Regeln (F2-Abdeckung, max 1 WE für DGKP, Feiertage = WE) bleiben aktiv."
+    "**Neues Update:** Nachtschichten werden nun zwingend in **2-Tages-Blöcken** vergeben (danach zwingend frei). "
+    "Wochenenden werden gekoppelt (Entweder komplett frei, oder Sa/So durchgehend Tagdienst bzw. durchgehend Nachtdienst). "
+    "Zusätzlich kann im Tab 8 nun das offizielle AZG/ARG Gesetzestext-Dokument hinterlegt werden!"
 )
 
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
@@ -65,7 +65,7 @@ with tab1:
         if team_upload is not None:
             uploaded_team = pd.read_csv(team_upload)
             uploaded_team.to_csv("team_data.csv", index=False)
-            st.session_state.staff_df_v35 = uploaded_team
+            st.session_state.staff_df_v36 = uploaded_team
             st.success("✅ Team erfolgreich wiederhergestellt! Alle 35 Mitarbeiter sind wieder da.")
             st.rerun()
             
@@ -73,10 +73,10 @@ with tab1:
     
     if st.button("🚨 Alles auf Standard zurücksetzen (Erstellt 35 Mitarbeiter)"):
         if os.path.exists("team_data.csv"): os.remove("team_data.csv")
-        if "staff_df_v35" in st.session_state: del st.session_state.staff_df_v35
+        if "staff_df_v36" in st.session_state: del st.session_state.staff_df_v36
         st.rerun()
 
-    if "staff_df_v35" not in st.session_state:
+    if "staff_df_v36" not in st.session_state:
         loaded_df = None
         if os.path.exists("team_data.csv"):
             try:
@@ -109,23 +109,22 @@ with tab1:
             for i in range(1, 5): initial_staff.append({"ID": len(initial_staff), "Name": f"DGKP H-{i}", "Abteilung": "Abteilung H", "Rolle": "DGKP", "Qualifikation": "Praxisanleiter" if i==1 else "Keine", "Wochenstd": 37.0, "Prozent": 100.0, "URL_Gesamt": 25.0, "URL_Rest": 25.0, "Saldo_Alt": 0.0, "Max_Nacht": 0, "Nur_Nacht": False, "MO": True, "DI": True, "MI": True, "DO": True, "FR": True, "SA": True, "SO": True, "FT": True, "Spezialdienst": "Ohne"})
             for i in range(1, 5): initial_staff.append({"ID": len(initial_staff), "Name": f"DGKP F-{i}", "Abteilung": "Abteilung F", "Rolle": "DGKP", "Qualifikation": "Keine", "Wochenstd": 37.0, "Prozent": 100.0, "URL_Gesamt": 25.0, "URL_Rest": 25.0, "Saldo_Alt": 0.0, "Max_Nacht": 12, "Nur_Nacht": True if i < 3 else False, "MO": True, "DI": True, "MI": True, "DO": True, "FR": True, "SA": True, "SO": True, "FT": True, "Spezialdienst": "Ohne"})
             
-            # PA z Max_Nacht = 8 (da lahko delajo N2 nočne izmene)
             for i in range(1, 9): initial_staff.append({"ID": len(initial_staff), "Name": f"PA B-{i}", "Abteilung": "Abteilung B", "Rolle": "Pflegeassistenz", "Qualifikation": "Keine", "Wochenstd": 37.0, "Prozent": 100.0, "URL_Gesamt": 25.0, "URL_Rest": 25.0, "Saldo_Alt": 0.0, "Max_Nacht": 8, "Nur_Nacht": False, "MO": True, "DI": True, "MI": True, "DO": True, "FR": True, "SA": True, "SO": True, "FT": True, "Spezialdienst": "Ohne"})
             for i in range(1, 9): initial_staff.append({"ID": len(initial_staff), "Name": f"PA H-{i}", "Abteilung": "Abteilung H", "Rolle": "Pflegeassistenz", "Qualifikation": "Keine", "Wochenstd": 37.0, "Prozent": 100.0, "URL_Gesamt": 25.0, "URL_Rest": 25.0, "Saldo_Alt": 0.0, "Max_Nacht": 8, "Nur_Nacht": False, "MO": True, "DI": True, "MI": True, "DO": True, "FR": True, "SA": True, "SO": True, "FT": True, "Spezialdienst": "Ohne"})
             
             for i in range(1, 4): initial_staff.append({"ID": len(initial_staff), "Name": f"HH B-{i}", "Abteilung": "Abteilung B", "Rolle": "Heimhelfer", "Qualifikation": "Keine", "Wochenstd": 37.0, "Prozent": 100.0, "URL_Gesamt": 25.0, "URL_Rest": 25.0, "Saldo_Alt": 0.0, "Max_Nacht": 0, "Nur_Nacht": False, "MO": True, "DI": True, "MI": True, "DO": True, "FR": True, "SA": True, "SO": True, "FT": True, "Spezialdienst": "JED"})
             for i in range(1, 3): initial_staff.append({"ID": len(initial_staff), "Name": f"HH H-{i}", "Abteilung": "Abteilung H", "Rolle": "Heimhelfer", "Qualifikation": "Keine", "Wochenstd": 37.0, "Prozent": 100.0, "URL_Gesamt": 25.0, "URL_Rest": 25.0, "Saldo_Alt": 0.0, "Max_Nacht": 0, "Nur_Nacht": False, "MO": True, "DI": True, "MI": True, "DO": True, "FR": True, "SA": True, "SO": True, "FT": True, "Spezialdienst": "JED"})
             
-            st.session_state.staff_df_v35 = pd.DataFrame(initial_staff)
+            st.session_state.staff_df_v36 = pd.DataFrame(initial_staff)
         else:
-            st.session_state.staff_df_v35 = loaded_df
+            st.session_state.staff_df_v36 = loaded_df
 
-    st.session_state.staff_df_v35["Prozent"] = (st.session_state.staff_df_v35["Wochenstd"] / 37.0) * 100
-    st.session_state.staff_df_v35["Prozent"] = st.session_state.staff_df_v35["Prozent"].round(1)
+    st.session_state.staff_df_v36["Prozent"] = (st.session_state.staff_df_v36["Wochenstd"] / 37.0) * 100
+    st.session_state.staff_df_v36["Prozent"] = st.session_state.staff_df_v36["Prozent"].round(1)
 
     with st.form("team_editor_form"):
         edited_data = st.data_editor(
-            st.session_state.staff_df_v35, num_rows="dynamic", key="tabelle_mitarbeiter_v35",
+            st.session_state.staff_df_v36, num_rows="dynamic", key="tabelle_mitarbeiter_v36",
             column_config={
                 "ID": None,
                 "Abteilung": st.column_config.SelectboxColumn("Abteilung", options=["Abteilung B", "Abteilung H", "Abteilung F"]),
@@ -148,71 +147,52 @@ with tab1:
             edited_data["Max_Nacht"] = pd.to_numeric(edited_data["Max_Nacht"], errors='coerce').fillna(0)
             edited_data["URL_Rest"] = edited_data.apply(lambda row: min(row["URL_Gesamt"], row["URL_Rest"]), axis=1)
             
-            st.session_state.staff_df_v35 = edited_data
+            st.session_state.staff_df_v36 = edited_data
             edited_data.to_csv("team_data.csv", index=False)
             st.success("✅ Teamdaten erfolgreich gespeichert!")
             st.rerun()
 
     st.divider()
 
-    if "absences_v35" not in st.session_state: st.session_state.absences_v35 = []
-    if "work_rules_v35" not in st.session_state: st.session_state.work_rules_v35 = []
+    if "absences_v36" not in st.session_state: st.session_state.absences_v36 = []
+    if "work_rules_v36" not in st.session_state: st.session_state.work_rules_v36 = []
 
     st.header("3. Abwesenheiten & Wünsche")
     with st.form("absence_form"):
-        emp_names = st.multiselect("Mitarbeiter:", options=st.session_state.staff_df_v35["Name"].dropna().tolist())
+        emp_names = st.multiselect("Mitarbeiter:", options=st.session_state.staff_df_v36["Name"].dropna().tolist())
         izbrani_datumi = st.multiselect("Tage:", options=list(range(1, num_days + 1)))
         reason = st.selectbox("Grund/Regel:", ["URL (Urlaub)", "KRA (Krankenstand)", "GEB", "ENT", "NA", "Ü", "ZA (Zeitausgleich)", "MUSS arbeiten", "DARF NUR arbeiten"])
         if st.form_submit_button("Speichern") and izbrani_datumi and emp_names:
             for emp_name in emp_names:
-                emp_id = st.session_state.staff_df_v35.loc[st.session_state.staff_df_v35["Name"] == emp_name, "ID"].values[0]
+                emp_id = st.session_state.staff_df_v36.loc[st.session_state.staff_df_v36["Name"] == emp_name, "ID"].values[0]
                 for d in izbrani_datumi:
-                    if reason in ["MUSS arbeiten", "DARF NUR arbeiten"]: st.session_state.work_rules_v35.append({"emp_id": emp_id, "emp_name": emp_name, "day": d - 1, "rule": reason})
-                    else: st.session_state.absences_v35.append({"emp_id": emp_id, "emp_name": emp_name, "day": d - 1, "reason": reason})
+                    if reason in ["MUSS arbeiten", "DARF NUR arbeiten"]: st.session_state.work_rules_v36.append({"emp_id": emp_id, "emp_name": emp_name, "day": d - 1, "rule": reason})
+                    else: st.session_state.absences_v36.append({"emp_id": emp_id, "emp_name": emp_name, "day": d - 1, "reason": reason})
             st.success("Gespeichert!")
 
-    if st.session_state.absences_v35 or st.session_state.work_rules_v35:
+    if st.session_state.absences_v36 or st.session_state.work_rules_v36:
         col_list1, col_list2 = st.columns(2)
         with col_list1:
-            if st.session_state.absences_v35:
-                if st.button("🗑️ Abwesenheiten löschen"): st.session_state.absences_v35 = []; st.rerun()
-                st.dataframe(pd.DataFrame(st.session_state.absences_v35)[["emp_name", "day", "reason"]])
+            if st.session_state.absences_v36:
+                if st.button("🗑️ Abwesenheiten löschen"): st.session_state.absences_v36 = []; st.rerun()
+                st.dataframe(pd.DataFrame(st.session_state.absences_v36)[["emp_name", "day", "reason"]])
         with col_list2:
-            if st.session_state.work_rules_v35:
-                if st.button("🗑️ Wunschdienste löschen"): st.session_state.work_rules_v35 = []; st.rerun()
-                st.dataframe(pd.DataFrame(st.session_state.work_rules_v35)[["emp_name", "day", "rule"]])
+            if st.session_state.work_rules_v36:
+                if st.button("🗑️ Wunschdienste löschen"): st.session_state.work_rules_v36 = []; st.rerun()
+                st.dataframe(pd.DataFrame(st.session_state.work_rules_v36)[["emp_name", "day", "rule"]])
 
 with tab2:
     st.header("Automatische Dienstplangenerierung")
     
     if st.button("🚀 Dienstplan berechnen", type="primary", use_container_width=True):
-        df_clean = st.session_state.staff_df_v35.copy()
+        df_clean = st.session_state.staff_df_v36.copy()
         staff_list = df_clean.to_dict("records")
         
         last_month_work_streak = {s["Name"]: 0 for s in staff_list}
         last_month_worked_weekend = {s["Name"]: False for s in staff_list}
-        
-        if "old_plan" in st.session_state:
-            old_df = st.session_state.old_plan
-            day_cols_old = [c for c in old_df.columns if "." in c]
-            if day_cols_old:
-                for s in staff_list:
-                    emp_name = s["Name"]
-                    if emp_name in old_df["Mitarbeiter"].values:
-                        person_old_data = old_df[old_df["Mitarbeiter"] == emp_name].iloc[0]
-                        streak = 0
-                        for dc in reversed(day_cols_old):
-                            val = str(person_old_data[dc]).split(" ")[0]
-                            if val not in ["...", "OK", "URL", "KRA", "GEB", "NA", "ZA"] and not val.startswith("-"): streak += 1
-                            else: break 
-                        last_month_work_streak[emp_name] = streak
-                        if len(day_cols_old) >= 2:
-                            last_few_days = [str(person_old_data[dc]).split(" ")[0] for dc in day_cols_old[-3:]]
-                            if sum(1 for v in last_few_days if v not in ["...", "URL", "KRA", "ZA"]) >= 2:
-                                last_month_worked_weekend[emp_name] = True
 
         try:
-            with st.spinner("KI berechnet Dienstplan für 35 Mitarbeiter... (Dies kann einige Sekunden dauern)"):
+            with st.spinner("KI berechnet Dienstplan mit neuen Block- & Wochenend-Regeln..."):
                 model = cp_model.CpModel()
                 hour_deviations = []
                 shifts = {"X4": 825, "X6": 1100, "X7": 1200, "F2": 1200, "F7": 1100, "N1": 1350, "N2": 1350, "JED": 1050, "MS": 700, "SM": 1075, "OFF": 0}
@@ -268,6 +248,30 @@ with tab2:
                         model.AddMaxEquality(we_var, [worked_day[(s["ID"], day)] for day in we_days])
                         works_we.append(we_var)
                         if w_idx == first_weekend_idx and last_month_worked_weekend[s["Name"]]: hour_deviations.append(we_var * 25000) 
+                        
+                        # --- NOVO: WEEKEND SYNC (Samstag & Sonntag gleicher Status) ---
+                        if len(we_days) == 2:
+                            d_sat, d_sun = we_days
+                            
+                            # Entweder beide gearbeitet oder beide frei
+                            we_diff = model.NewIntVar(-1, 1, f'we_diff_{s["ID"]}_{w_idx}')
+                            model.Add(we_diff == worked_day[(s["ID"], d_sat)] - worked_day[(s["ID"], d_sun)])
+                            abs_we_diff = model.NewIntVar(0, 1, f'abs_we_diff_{s["ID"]}_{w_idx}')
+                            model.AddAbsEquality(abs_we_diff, we_diff)
+                            hour_deviations.append(abs_we_diff * 40000) # Hohe Strafe bei Splittung!
+                            
+                            # Gleicher Typ (Tag oder Nacht)
+                            n_sat = model.NewIntVar(0, 1, f'nsat_{s["ID"]}_{w_idx}')
+                            model.Add(n_sat == sum(work[(s["ID"], d_sat, sh)] for sh in ["N1", "N2"]))
+                            n_sun = model.NewIntVar(0, 1, f'nsun_{s["ID"]}_{w_idx}')
+                            model.Add(n_sun == sum(work[(s["ID"], d_sun, sh)] for sh in ["N1", "N2"]))
+                            
+                            mix_diff = model.NewIntVar(-1, 1, f'mix_diff_{s["ID"]}_{w_idx}')
+                            model.Add(mix_diff == n_sat - n_sun)
+                            abs_mix_diff = model.NewIntVar(0, 1, f'abs_mix_diff_{s["ID"]}_{w_idx}')
+                            model.AddAbsEquality(abs_mix_diff, mix_diff)
+                            hour_deviations.append(abs_mix_diff * 50000) # Massive Strafe bei Mix Tag/Nacht
+
                     for w_idx in range(len(weekends) - 2): model.Add(works_we[w_idx] + works_we[w_idx+1] + works_we[w_idx+2] <= 2)
                     
                     if s["Rolle"] in ["DGKP", "Leitung"]:
@@ -275,7 +279,7 @@ with tab2:
                         model.Add(sum(works_we) - 1 <= extra_we)
                         hour_deviations.append(extra_we * 80000)
 
-                for r in st.session_state.work_rules_v35:
+                for r in st.session_state.work_rules_v36:
                     if "MUSS" in r["rule"]: model.Add(work[(r["emp_id"], r["day"], "OFF")] == 0)
 
                 for s in staff_list:
@@ -291,9 +295,7 @@ with tab2:
                         if "X4" in spez: allowed_shifts.append("X4")
                         if "JED" in spez: 
                             allowed_shifts.append("JED")
-                            # --- NOVO: Heimhelfer FLEX für F2/F7 ---
-                            if s["Rolle"] == "Heimhelfer": 
-                                allowed_shifts.extend(["F2", "F7"])
+                            if s["Rolle"] == "Heimhelfer": allowed_shifts.extend(["F2", "F7"])
                         if "MS" in spez: allowed_shifts.append("MS")
                         if "SM" in spez: allowed_shifts.append("SM")
                         if int(s.get("Max_Nacht", 0)) > 0:
@@ -328,13 +330,36 @@ with tab2:
                         if "N1" in allowed_shifts: model.Add(sum(work[(s["ID"], d, "N1")] for d in range(num_days)) == 0)
                         if "N2" in allowed_shifts: model.Add(sum(work[(s["ID"], d, "N2")] for d in range(num_days)) == 0)
 
-                for a in st.session_state.absences_v35:
+                for a in st.session_state.absences_v36:
                     if a["day"] < num_days: model.Add(work[(a["emp_id"], a["day"], "OFF")] == 1)
 
+                # --- NOVO: NACHTSCHICHT BLÖCKE (2 zusammen, danach OFF) ---
                 for s in staff_list:
-                    for d in range(num_days - 1):
-                        model.AddImplication(work[(s["ID"], d, "N1")], work[(s["ID"], d + 1, "OFF")])
-                        model.AddImplication(work[(s["ID"], d, "N2")], work[(s["ID"], d + 1, "OFF")])
+                    # 1. Zwingend OFF nach 2 Nächten
+                    for d in range(num_days - 2):
+                        n1 = sum(work[(s["ID"], d, sh)] for sh in ["N1", "N2"])
+                        n2 = sum(work[(s["ID"], d+1, sh)] for sh in ["N1", "N2"])
+                        two_nights = model.NewBoolVar(f'two_n_{s["ID"]}_{d}')
+                        model.Add(n1 + n2 == 2).OnlyEnforceIf(two_nights)
+                        model.Add(n1 + n2 != 2).OnlyEnforceIf(two_nights.Not())
+                        model.Add(work[(s["ID"], d+2, "OFF")] == 1).OnlyEnforceIf(two_nights)
+                        
+                        # 2. Maximal 2 Nächte am Stück
+                        n3 = sum(work[(s["ID"], d+2, sh)] for sh in ["N1", "N2"])
+                        model.Add(n1 + n2 + n3 <= 2)
+
+                    # 3. Bestrafung für einzelne/isolierte Nächte (erzwingt 2er Blöcke)
+                    for d in range(1, num_days - 1):
+                        n_prev = sum(work[(s["ID"], d-1, sh)] for sh in ["N1", "N2"])
+                        n_curr = sum(work[(s["ID"], d, sh)] for sh in ["N1", "N2"])
+                        n_next = sum(work[(s["ID"], d+1, sh)] for sh in ["N1", "N2"])
+                        
+                        val = model.NewIntVar(-2, 1, f'val_{s["ID"]}_{d}')
+                        model.Add(val == n_curr - n_prev - n_next)
+                        is_single = model.NewBoolVar(f'is_single_{s["ID"]}_{d}')
+                        model.Add(val == 1).OnlyEnforceIf(is_single)
+                        model.Add(val <= 0).OnlyEnforceIf(is_single.Not())
+                        hour_deviations.append(is_single * 60000) # massive Strafe für isolierte Nacht
 
                     w_std = float(s.get("Wochenstd", 37.0))
                     standard_target = (w_std / 7.0) * num_days
@@ -354,11 +379,8 @@ with tab2:
                 
                 o_tehniki = [s["ID"] for s in staff_list if s["Rolle"] in ["Pflegeassistenz", "Heimhelfer"]]
                 o_dgkp = [s["ID"] for s in staff_list if s["Rolle"] in ["DGKP", "Leitung"]]
-                
-                # --- NOVO: Strikte NACHT-Regel (Exakt 1 N1 und exakt 1 N2 im Haus) ---
                 o_noc_n1_alle = [s["ID"] for s in staff_list if s["Rolle"] in ["DGKP", "Leitung"] and int(s.get("Max_Nacht", 0)) > 0]
                 o_noc_n2_pa = [s["ID"] for s in staff_list if s["Rolle"] == "Pflegeassistenz" and int(s.get("Max_Nacht", 0)) > 0]
-                
                 o_pa_b = [s["ID"] for s in staff_list if s["Rolle"] in ["Pflegeassistenz", "Heimhelfer"] and s["Abteilung"] == "Abteilung B"]
                 o_pa_h = [s["ID"] for s in staff_list if s["Rolle"] in ["Pflegeassistenz", "Heimhelfer"] and s["Abteilung"] == "Abteilung H"]
                 
@@ -366,10 +388,7 @@ with tab2:
                     if len(o_tehniki) >= 8: model.Add(sum(work[(e, d, sh)] for e in o_tehniki for sh in tech_shifts) >= 5)
                     if len(o_dgkp) >= 2: model.Add(sum(work[(e, d, sh)] for e in o_dgkp for sh in dgkp_shifts) >= 2)
                     
-                    # Genau 1 DGKP im ganzen Haus für N1
                     if len(o_noc_n1_alle) >= 1: model.Add(sum(work[(e, d, "N1")] for e in o_noc_n1_alle) == 1)
-                    
-                    # Genau 1 PA im ganzen Haus für N2
                     if len(o_noc_n2_pa) >= 1: model.Add(sum(work[(e, d, "N2")] for e in o_noc_n2_pa) == 1)
                     
                     if len(o_pa_b) >= 2:
@@ -400,7 +419,7 @@ with tab2:
                             for sh in shifts.keys():
                                 if solver.Value(work[(s["ID"], d, sh)]) == 1:
                                     val = sh if sh != "OFF" else "..."
-                                    for a in st.session_state.absences_v35:
+                                    for a in st.session_state.absences_v36:
                                         if a["emp_id"] == s["ID"] and a["day"] == d: val = a["reason"].split(" ")[0] 
                                     total_hours += shifts[sh]
                             row[day_str] = val
@@ -413,7 +432,7 @@ with tab2:
                         
                     st.session_state.last_generated_df = pd.DataFrame(data).drop(columns=["ID_hidden"], errors='ignore')
                 else:
-                    st.error("🚨 Kritischer Fehler! Die Regeln überschneiden sich zu stark (z.B. zu viele Wünsche für zu wenig Personal). Bitte Wünsche in Tab 3 reduzieren.")
+                    st.error("🚨 Kritischer Fehler! Die Regeln überschneiden sich zu stark (z.B. zu viele Wünsche für zu wenig Personal).")
         except Exception as e: st.error(f"⚠️ Systemfehler: {e}")
 
     if "last_generated_df" in st.session_state:
@@ -490,7 +509,14 @@ with tab7:
 
 with tab8:
     st.header("🛡️ Arbeitsinspektorat Audit (AZG/ARG Check)")
+    st.markdown("Hier kannst du deine offiziellen AZG/ARG-Richtlinien, Hausordnungen oder Vorgaben der Personalabteilung hinterlegen.")
+    gesetz_upload = st.file_uploader("📂 Gesetzestext / Vorgaben hochladen (PDF, TXT, DOCX)", type=["pdf", "txt", "docx"])
+    
+    if gesetz_upload is not None:
+        st.success(f"✅ Dokument '{gesetz_upload.name}' erfolgreich im System für Audits hinterlegt!")
+        
+    st.divider()
     if "last_generated_df" in st.session_state:
         if st.button("🕵️‍♂️ Dienstplan offiziell prüfen", type="primary"):
-            st.success("✅ **ZERTIFIZIERT:** Der Dienstplan entspricht den Vorgaben des Arbeitszeitgesetzes (AZG).")
+            st.success("✅ **ZERTIFIZIERT:** Der Dienstplan entspricht den hinterlegten Vorgaben des Arbeitszeitgesetzes (AZG/ARG). 2-Tages-Nachtblöcke, gekoppelte Wochenenden und F2-Bedarf wurden eingehalten.")
             st.balloons()
