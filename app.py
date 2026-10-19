@@ -9,14 +9,13 @@ from ortools.sat.python import cp_model
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="KI-Dienstplan PRO 51.0", layout="wide")
+st.set_page_config(page_title="KI-Dienstplan PRO 53.0", layout="wide")
 
-st.title("🏥 KI-Dienstplan System (Version 51.0 - Ultra-Light & Safe)")
+st.title("🏥 KI-Dienstplan System (Version 53.0 - Springer & Cross-Coverage)")
 st.markdown(
-    "**Performance & Stabilitäts-Update:** \n"
-    "- ⚡ **System-Freeze behoben:** Die App lädt jetzt sofort!\n"
-    "- 🛠️ **Syntax-Fix:** Der Code wurde für fehlerfreies Copy-Paste formatiert.\n"
-    "- Nutze für Urlaube jetzt einfach das **'Schnelleingabe'**-Feld in Tab 3 oder tippe 'URL' direkt in die Zelle."
+    "**Sicherheits-Update:** \n"
+    "- 🤝 **Abteilungs-Springer (B & H):** Wenn Abt B zu wenig Personal oder keine DGKP hat, 'leiht' sich das System nun automatisch überschüssiges Personal von Abt H aus, bevor es eine Fehlermeldung wirft!\n"
+    "- 🛑 **Nachtschicht-Regel (STRIKT):** Nach jeder Nachtschicht zwingend 2 freie Tage."
 )
 
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
@@ -69,7 +68,7 @@ with tab1:
         if team_upload is not None:
             uploaded_team = pd.read_csv(team_upload)
             uploaded_team.to_csv("team_data.csv", index=False)
-            st.session_state.staff_df_v51 = uploaded_team
+            st.session_state.staff_df_v53 = uploaded_team
             st.success("✅ Team erfolgreich wiederhergestellt!")
             st.rerun()
             
@@ -77,11 +76,11 @@ with tab1:
     if st.button("🚨 Alles auf Standard zurücksetzen (Erstellt 35 Mitarbeiter)"):
         if os.path.exists("team_data.csv"): 
             os.remove("team_data.csv")
-        if "staff_df_v51" in st.session_state: 
-            del st.session_state.staff_df_v51
+        if "staff_df_v53" in st.session_state: 
+            del st.session_state.staff_df_v53
         st.rerun()
 
-    if "staff_df_v51" not in st.session_state:
+    if "staff_df_v53" not in st.session_state:
         loaded_df = None
         if os.path.exists("team_data.csv"):
             try:
@@ -117,16 +116,16 @@ with tab1:
             for i in range(1, 4): initial_staff.append({"ID": len(initial_staff), "Name": f"HH B-{i}", "Abteilung": "Abteilung B", "Rolle": "Heimhelfer", "Qualifikation": "Keine", "Wochenstd": 37.0, "Prozent": 100.0, "URL_Gesamt": 25.0, "URL_Rest": 25.0, "Saldo_Alt": 0.0, "Max_Nacht": 0, "Nur_Nacht": False, "MO": True, "DI": True, "MI": True, "DO": True, "FR": True, "SA": True, "SO": True, "FT": True, "Spezialdienst": "JED"})
             for i in range(1, 3): initial_staff.append({"ID": len(initial_staff), "Name": f"HH H-{i}", "Abteilung": "Abteilung H", "Rolle": "Heimhelfer", "Qualifikation": "Keine", "Wochenstd": 37.0, "Prozent": 100.0, "URL_Gesamt": 25.0, "URL_Rest": 25.0, "Saldo_Alt": 0.0, "Max_Nacht": 0, "Nur_Nacht": False, "MO": True, "DI": True, "MI": True, "DO": True, "FR": True, "SA": True, "SO": True, "FT": True, "Spezialdienst": "JED"})
             
-            st.session_state.staff_df_v51 = pd.DataFrame(initial_staff)
+            st.session_state.staff_df_v53 = pd.DataFrame(initial_staff)
         else:
-            st.session_state.staff_df_v51 = loaded_df
+            st.session_state.staff_df_v53 = loaded_df
 
-    st.session_state.staff_df_v51["Prozent"] = (st.session_state.staff_df_v51["Wochenstd"] / 37.0) * 100
-    st.session_state.staff_df_v51["Prozent"] = st.session_state.staff_df_v51["Prozent"].round(1)
+    st.session_state.staff_df_v53["Prozent"] = (st.session_state.staff_df_v53["Wochenstd"] / 37.0) * 100
+    st.session_state.staff_df_v53["Prozent"] = st.session_state.staff_df_v53["Prozent"].round(1)
 
     with st.form("team_editor_form"):
         edited_data = st.data_editor(
-            st.session_state.staff_df_v51, num_rows="dynamic", key="tabelle_mitarbeiter_v51",
+            st.session_state.staff_df_v53, num_rows="dynamic", key="tabelle_mitarbeiter_v53",
             column_config={
                 "ID": None,
                 "Abteilung": st.column_config.SelectboxColumn("Abteilung", options=["Abteilung B", "Abteilung H", "Abteilung F"]),
@@ -151,7 +150,7 @@ with tab1:
             edited_data["Prozent"] = edited_data["Prozent"].round(1)
             edited_data["URL_Rest"] = edited_data.apply(lambda row: min(row["URL_Gesamt"], row["URL_Rest"]), axis=1)
             
-            st.session_state.staff_df_v51 = edited_data
+            st.session_state.staff_df_v53 = edited_data
             edited_data.to_csv("team_data.csv", index=False)
             st.success("✅ Teamdaten erfolgreich gespeichert!")
             st.rerun()
@@ -159,7 +158,7 @@ with tab1:
 with tab3:
     st.header("🏝️ 3. Abwesenheiten & Wünsche (Smart Matrix)")
     
-    current_staff = st.session_state.staff_df_v51["Name"].dropna().tolist()
+    current_staff = st.session_state.staff_df_v53["Name"].dropna().tolist()
     
     day_cols = []
     for d in range(1, num_days + 1):
@@ -175,16 +174,16 @@ with tab3:
             col_name = f"{d}. {dow_str}"
         day_cols.append(col_name)
 
-    if "abs_matrix_v51" not in st.session_state:
-        st.session_state.abs_matrix_v51 = pd.DataFrame(index=current_staff, columns=day_cols).fillna("")
+    if "abs_matrix_v53" not in st.session_state:
+        st.session_state.abs_matrix_v53 = pd.DataFrame(index=current_staff, columns=day_cols).fillna("")
     else:
-        old_matrix = st.session_state.abs_matrix_v51
+        old_matrix = st.session_state.abs_matrix_v53
         new_matrix = pd.DataFrame(index=current_staff, columns=day_cols).fillna("")
         for emp in current_staff:
             if emp in old_matrix.index:
                 for i in range(min(len(day_cols), len(old_matrix.columns))):
                     new_matrix.at[emp, day_cols[i]] = old_matrix.iloc[old_matrix.index.get_loc(emp), i]
-        st.session_state.abs_matrix_v51 = new_matrix
+        st.session_state.abs_matrix_v53 = new_matrix
 
     color_options = ["", "🔴 URL", "🟠 SU", "🟣 ENT", "🔵 KRA", "⚫ ZA", "🟢 WUNSCH", "⚪ MUSS"]
 
@@ -192,7 +191,7 @@ with tab3:
     with col_bak1:
         st.download_button(
             label="📥 Kalender-Backup speichern", 
-            data=st.session_state.abs_matrix_v51.to_csv(index=True).encode('utf-8'), 
+            data=st.session_state.abs_matrix_v53.to_csv(index=True).encode('utf-8'), 
             file_name=f"Urlaubsmatrix_{mesec}_{leto}.csv", 
             mime="text/csv"
         )
@@ -200,7 +199,7 @@ with tab3:
         cal_upload = st.file_uploader("📂 Kalender Backup hochladen", type=["csv"], key="cal_upload")
         if cal_upload is not None:
             uploaded_cal = pd.read_csv(cal_upload, index_col=0)
-            st.session_state.abs_matrix_v51 = uploaded_cal
+            st.session_state.abs_matrix_v53 = uploaded_cal
             st.success("✅ Kalender erfolgreich geladen!")
             st.rerun()
             
@@ -224,7 +223,7 @@ with tab3:
             for emp in selected_emps:
                 for d in range(d_start, d_end + 1):
                     target_col = day_cols[d-1]
-                    st.session_state.abs_matrix_v51.at[emp, target_col] = selected_reason
+                    st.session_state.abs_matrix_v53.at[emp, target_col] = selected_reason
             st.success("✅ Erfolgreich in die Matrix übernommen!")
             st.rerun()
 
@@ -234,12 +233,12 @@ with tab3:
     for c in day_cols:
         col_config[c] = st.column_config.TextColumn(c, width="small")
         
-    st.session_state.abs_matrix_v51 = st.data_editor(
-        st.session_state.abs_matrix_v51,
+    st.session_state.abs_matrix_v53 = st.data_editor(
+        st.session_state.abs_matrix_v53,
         column_config=col_config,
         use_container_width=True,
         height=700,
-        key="live_abwesenheiten_matrix_v51"
+        key="live_abwesenheiten_matrix_v53"
     )
 
 with tab2:
@@ -248,9 +247,9 @@ with tab2:
     if st.button("🚀 Dienstplan berechnen", type="primary", use_container_width=True):
         
         try:
-            with st.spinner("⏳ KI berechnet Dienstplan im GOD-MODE..."):
+            with st.spinner("⏳ KI berechnet Dienstplan... (Cross-Coverage aktiv)"):
                 
-                df_clean = st.session_state.staff_df_v51.copy()
+                df_clean = st.session_state.staff_df_v53.copy()
                 df_clean = df_clean.dropna(subset=["Name"])
                 df_clean = df_clean[df_clean["Name"].str.strip() != ""] 
                 
@@ -261,24 +260,18 @@ with tab2:
                 staff_list = df_clean.to_dict("records")
                 
                 virtual_staff = []
-                for i in range(1, 6): 
+                for i in range(1, 4): 
                     virtual_staff.append({"ID": 1000+i, "Name": f"⚠️ X-Oseba B-{i}", "Abteilung": "Abteilung B", "Rolle": "Pflegeassistenz", "Virtual": True, "Max_Nacht": 0})
-                for i in range(1, 3): 
-                    virtual_staff.append({"ID": 1010+i, "Name": f"⚠️ X-Oseba Speis-{i}", "Abteilung": "Abteilung B", "Rolle": "Heimhelfer", "Virtual": True, "Max_Nacht": 0})
-                for i in range(1, 6): 
+                for i in range(1, 4): 
                     virtual_staff.append({"ID": 1020+i, "Name": f"⚠️ X-Oseba H-{i}", "Abteilung": "Abteilung H", "Rolle": "Pflegeassistenz", "Virtual": True, "Max_Nacht": 0})
-                for i in range(1, 3): 
-                    virtual_staff.append({"ID": 1030+i, "Name": f"⚠️ X-Oseba N1-{i}", "Abteilung": "Abteilung F", "Rolle": "DGKP", "Virtual": True, "Max_Nacht": 31})
-                for i in range(1, 3): 
-                    virtual_staff.append({"ID": 1040+i, "Name": f"⚠️ X-Oseba N2-{i}", "Abteilung": "Abteilung F", "Rolle": "Pflegeassistenz", "Virtual": True, "Max_Nacht": 31})
                 
                 model_staff = staff_list + virtual_staff
                 
                 last_month_work_streak = {s["Name"]: 0 for s in model_staff}
                 last_month_worked_weekend = {s["Name"]: False for s in model_staff}
 
-                st.session_state.absences_v51 = []
-                st.session_state.work_rules_v51 = []
+                st.session_state.absences_v53 = []
+                st.session_state.work_rules_v53 = []
                 
                 for emp_name in current_staff:
                     emp_id_list = df_clean.loc[df_clean["Name"] == emp_name, "ID"].values
@@ -287,7 +280,7 @@ with tab2:
                     
                     for d in range(1, num_days + 1):
                         col_name = day_cols[d-1]
-                        val = st.session_state.abs_matrix_v51.at[emp_name, col_name]
+                        val = st.session_state.abs_matrix_v53.at[emp_name, col_name]
                         
                         if pd.notna(val) and str(val).strip() != "":
                             day_idx = d - 1
@@ -303,9 +296,9 @@ with tab2:
                             elif "MUSS" in val_str: reason = "MUSS-ARBEITEN"
                             
                             if reason in ["URL", "SU", "ENT", "KRA", "ZA", "WUNSCH-FREI"]:
-                                st.session_state.absences_v51.append({"emp_id": emp_id, "emp_name": emp_name, "day": day_idx, "reason": reason})
+                                st.session_state.absences_v53.append({"emp_id": emp_id, "emp_name": emp_name, "day": day_idx, "reason": reason})
                             elif reason == "MUSS-ARBEITEN":
-                                st.session_state.work_rules_v51.append({"emp_id": emp_id, "emp_name": emp_name, "day": day_idx, "rule": reason})
+                                st.session_state.work_rules_v53.append({"emp_id": emp_id, "emp_name": emp_name, "day": day_idx, "rule": reason})
 
                 model = cp_model.CpModel()
                 hour_deviations = []
@@ -332,6 +325,21 @@ with tab2:
                                 if sh != "OFF":
                                     hour_deviations.append(work[(s["ID"], d, sh)] * 1000000) 
                         continue
+
+                    # --- FIX: ZAKONSKI POČITEK PO NOČNI (2 DNI STRIKTNO OFF) ---
+                    for d in range(num_days - 1):
+                        n_curr = sum(work[(s["ID"], d, sh)] for sh in ["N1", "N2"])
+                        n_next = sum(work[(s["ID"], d+1, sh)] for sh in ["N1", "N2"])
+                        
+                        ends_night_block = model.NewBoolVar(f'end_n_blk_{s["ID"]}_{d}')
+                        model.Add(n_curr - n_next == 1).OnlyEnforceIf(ends_night_block)
+                        model.Add(n_curr - n_next != 1).OnlyEnforceIf(ends_night_block.Not())
+                        
+                        # 1. Schlaftag (zwingend)
+                        model.Add(work[(s["ID"], d+1, "OFF")] == 1).OnlyEnforceIf(ends_night_block)
+                        # 2. Ruhetag (zwingend)
+                        if d + 2 < num_days:
+                            model.Add(work[(s["ID"], d+2, "OFF")] == 1).OnlyEnforceIf(ends_night_block)
 
                     for d in range(num_days - 3):
                         four_days = model.NewBoolVar(f'four_days_{s["ID"]}_{d}')
@@ -400,7 +408,7 @@ with tab2:
                         model.Add(sum(works_we) - 1 <= extra_we)
                         hour_deviations.append(extra_we * 80000)
 
-                for r in st.session_state.work_rules_v51:
+                for r in st.session_state.work_rules_v53:
                     model.Add(work[(r["emp_id"], r["day"], "OFF")] == 0)
 
                 for s in model_staff:
@@ -479,7 +487,7 @@ with tab2:
                             model.Add(sum(work[(s["ID"], d, "N1")] for d in range(num_days)) == 0)
                             model.Add(sum(work[(s["ID"], d, "N2")] for d in range(num_days)) == 0)
 
-                for a in st.session_state.absences_v51:
+                for a in st.session_state.absences_v53:
                     if a["day"] < num_days: 
                         model.Add(work[(a["emp_id"], a["day"], "OFF")] == 1)
 
@@ -528,22 +536,63 @@ with tab2:
                     model.Add(dev >= adjusted_target - total_hours)
                     hour_deviations.append(dev)
 
+                # --- NOVO: CROSS-COVERAGE (SPRINGER B & H) ---
                 day_sh = ["X4", "X6", "X7", "F2", "F7", "MS", "SM"]
-                o_b_all = [s["ID"] for s in model_staff if s["Abteilung"] == "Abteilung B"]
-                o_h_all = [s["ID"] for s in model_staff if s["Abteilung"] == "Abteilung H"]
+                
+                o_b_all = [s["ID"] for s in model_staff if s["Abteilung"] == "Abteilung B" and not s.get("Virtual")]
+                o_h_all = [s["ID"] for s in model_staff if s["Abteilung"] == "Abteilung H" and not s.get("Virtual")]
+                
+                o_dgkp_b = [s["ID"] for s in model_staff if s["Abteilung"] == "Abteilung B" and (s["Rolle"] in ["DGKP", "Leitung"] or s.get("Virtual"))]
+                o_dgkp_h = [s["ID"] for s in model_staff if s["Abteilung"] == "Abteilung H" and (s["Rolle"] in ["DGKP", "Leitung"] or s.get("Virtual"))]
+                
                 o_n1_alle = [s["ID"] for s in model_staff if s["Rolle"] in ["DGKP", "Leitung"] and (s.get("Max_Nacht", 0) > 0 or s.get("Virtual"))]
                 o_n2_pa = [s["ID"] for s in model_staff if s["Rolle"] == "Pflegeassistenz" and (s.get("Max_Nacht", 0) > 0 or s.get("Virtual"))]
                 
                 for d in range(num_days):
-                    model.Add(sum(work[(e, d, sh)] for e in o_b_all for sh in day_sh) >= 4)
+                    # 1. TOTAL STAFF B + H
+                    b_day = sum(work[(e, d, sh)] for e in o_b_all for sh in day_sh)
+                    h_day = sum(work[(e, d, sh)] for e in o_h_all for sh in day_sh)
+                    
+                    model.Add(b_day + h_day >= 8)
+                    model.Add(b_day >= 3)
+                    model.Add(h_day >= 3)
+                    
+                    b_short = model.NewBoolVar(f'b_short_{d}')
+                    model.Add(b_day < 4).OnlyEnforceIf(b_short)
+                    model.Add(b_day >= 4).OnlyEnforceIf(b_short.Not())
+                    hour_deviations.append(b_short * 25000)
+                    
+                    h_short = model.NewBoolVar(f'h_short_{d}')
+                    model.Add(h_day < 4).OnlyEnforceIf(h_short)
+                    model.Add(h_day >= 4).OnlyEnforceIf(h_short.Not())
+                    hour_deviations.append(h_short * 25000)
+
+                    # 2. JED
                     model.Add(sum(work[(e, d, "JED")] for e in o_b_all) >= 1)
-                    model.Add(sum(work[(e, d, sh)] for e in o_h_all for sh in day_sh) >= 4)
+                    
+                    # 3. DGKP CROSS-COVERAGE
+                    b_dgkp = sum(work[(e, d, sh)] for e in o_dgkp_b for sh in dgkp_shifts)
+                    h_dgkp = sum(work[(e, d, sh)] for e in o_dgkp_h for sh in dgkp_shifts)
+                    
+                    model.Add(b_dgkp + h_dgkp >= 2)
+                    
+                    b_dg_short = model.NewBoolVar(f'b_dg_short_{d}')
+                    model.Add(b_dgkp == 0).OnlyEnforceIf(b_dg_short)
+                    model.Add(b_dgkp >= 1).OnlyEnforceIf(b_dg_short.Not())
+                    hour_deviations.append(b_dg_short * 15000)
+
+                    h_dg_short = model.NewBoolVar(f'h_dg_short_{d}')
+                    model.Add(h_dgkp == 0).OnlyEnforceIf(h_dg_short)
+                    model.Add(h_dgkp >= 1).OnlyEnforceIf(h_dg_short.Not())
+                    hour_deviations.append(h_dg_short * 15000)
+                    
+                    # 4. NACHT
                     model.Add(sum(work[(e, d, "N1")] for e in o_n1_alle) == 1)
                     model.Add(sum(work[(e, d, "N2")] for e in o_n2_pa) == 1)
 
                 model.Minimize(sum(hour_deviations))
                 solver = cp_model.CpSolver()
-                solver.parameters.max_time_in_seconds = 15.0
+                solver.parameters.max_time_in_seconds = 20.0
                 status = solver.Solve(model)
 
                 if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
@@ -571,7 +620,7 @@ with tab2:
                                     if s.get("Virtual") and sh != "OFF":
                                         val = f"🚨 {sh}" 
                                         
-                                    for a in st.session_state.absences_v51:
+                                    for a in st.session_state.absences_v53:
                                         if not s.get("Virtual") and a["emp_id"] == s["ID"] and a["day"] == d: 
                                             if "WUNSCH" in a["reason"]: val = "WUNSCH"
                                             elif "MUSS" in a["reason"]: val = "MUSS"
@@ -587,7 +636,7 @@ with tab2:
                         
                     st.session_state.last_generated_df = pd.DataFrame(data).drop(columns=["ID_hidden"], errors='ignore')
                 else:
-                    st.error("🚨 FEHLER: System-Error.")
+                    st.error("🚨 FEHLER: System-Error. Bitte weniger harte Urlaube eintragen.")
         except Exception as e: 
             st.error(f"⚠️ KRITISCHER SYSTEMFEHLER: {e}")
 
