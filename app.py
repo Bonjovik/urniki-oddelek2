@@ -9,14 +9,14 @@ from ortools.sat.python import cp_model
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="KI-Dienstplan PRO 69.0", layout="wide")
+st.set_page_config(page_title="KI-Dienstplan PRO 69.1", layout="wide")
 
-st.title("🏥 KI-Dienstplan System (Version 69.0 - StPAVO Rechner, PFA & Kompakt-Kalender)")
+st.title("🏥 KI-Dienstplan System (Version 69.1 - StPAVO Rechner, PFA & Kompakt-Kalender)")
 st.markdown(
     "**System-Architektur (StPAVO Steiermark Berechnung, PFA-Integration & Kompakt-Kalender):** \n"
-    "- 🧮 **NEU: Tab 3 – StPAVO Personalrechner:** Berechnet aus den **Pflegestufen (0–7)** exakt die nötigen **VZÄ**, den **täglichen Schichtbedarf pro Station** sowie den **Prozent-Mix (DGKP, PFA, PA, HH)** nach steirischem Gesetz.\n"
-    "- 💉 **Pflegefachassistenz (PFA) integriert:** Neue Rolle `PFA` im gesamten System (Team, Dienste-Studio, StPAVO & KI-Planer) verfügbar.\n"
-    "- 🗓️ **NEU: Tab 4 – Kompakte Urlaubs- & Wunsch-Tabellen:** Aufgeteilt in kleinere Stations-Tabellen mit schmalen Spalten (`1`–`31`) und Farbcodierung für volle Monatsübersicht auf einen Blick."
+    "- 🧮 **Tab 3 – StPAVO Personalrechner:** Berechnet aus den **Pflegestufen (0–7)** exakt die nötigen **VZÄ**, den **täglichen Schichtbedarf pro Station** sowie den **Prozent-Mix (DGKP, PFA, PA, HH)** nach steirischem Gesetz.\n"
+    "- 💉 **Pflegefachassistenz (PFA) integriert:** Rolle `PFA` im gesamten System (Team, Dienste-Studio, StPAVO & KI-Planer) verfügbar.\n"
+    "- 🗓️ **Tab 4 – Kompakte Urlaubs- & Wunsch-Tabellen:** Aufgeteilt in kleinere Stations-Tabellen mit schmalen Spalten (`1`–`31`) und Farbcodierung für volle Monatsübersicht auf einen Blick."
 )
 
 PAID_ABSENCES = ["URL", "SU", "ENT", "KRA", "PFLEGE"]
@@ -468,7 +468,7 @@ def style_coverage_summary(df_sum):
     def color_row(row):
         kat = str(row.get("Kontroll-Kategorie", ""))
         styles = ["font-weight: bold; background-color: #f8f9fa; color: #212529;"]
-        min_ needed = 4
+        min_needed = 4
         if "Min. " in kat:
             try:
                 min_needed = int(kat.split("Min. ")[1].split(")")[0])
@@ -994,7 +994,6 @@ with tab_shifts:
             st.session_state.shifts_editor_ver += 1
             st.rerun()
 
-# --- NEUER TAB 3: StPAVO PERSONALRECHNER (STEIERMARK) ---
 with tab_pavo:
     st.header("🧮 3. StPAVO Steiermark – Personalberechnung nach Pflegestufen & Qualifikations-Mix")
     st.markdown(
@@ -1040,7 +1039,6 @@ with tab_pavo:
             "Stufe 0 = 1:24 | Stufe 1 = 1:12 | Stufe 2 = 1:7,5 | Stufe 3 = 1:4,0 | Stufe 4 = 1:2,5 | Stufe 5 = 1:2,0 | Stufe 6 = 1:1,5 | Stufe 7 = 1:1,5"
         )
 
-    # Berechnung der VZÄ je Station nach StPAVO
     stufen_cols = ["Stufe_0", "Stufe_1", "Stufe_2", "Stufe_3", "Stufe_4", "Stufe_5", "Stufe_6", "Stufe_7"]
     station_results = []
     total_residents = 0
@@ -1051,12 +1049,8 @@ with tab_pavo:
         bew_sum = sum(int(p_row.get(sc, 0)) for sc in stufen_cols)
         vza_sum = sum(float(p_row.get(sc, 0)) / DEFAULT_PAVO_KEYS[sc] for sc in stufen_cols)
         
-        # Umrechnung VZÄ -> Täglicher Schichtbedarf im Tagdienst:
-        # Netto-Arbeitsstunden pro VZÄ pro Woche (inkl. Urlaub/Krankenstand/Fortbildung ~80% Anwesenheit = ca. 29.6h/Woche netto)
-        # Nachtdienst (1x N1 + 1x N2 hausweit) bindet ca. 3.3 VZÄ pro Station (6.6 VZÄ gesamt).
         netto_tag_vza = max(1.0, vza_sum - 3.2)
         daily_netto_hours = (netto_tag_vza * 29.8) / 7.0
-        # Bei durchschnittlich ~11.2h Schichtlänge im Tagdienst:
         daily_persons_tag = max(1, int(round(daily_netto_hours / 11.2)))
         
         total_residents += bew_sum
@@ -1072,7 +1066,6 @@ with tab_pavo:
 
     df_stat_res = pd.DataFrame(station_results)
 
-    # Vergleich mit IST-Personalstand aus Tab 1
     df_team_curr = sanitize_team_df(st.session_state.staff_df_v69)
     ist_vza_total = (df_team_curr["Wochenstd"].sum() / 37.0)
     diff_vza = ist_vza_total - total_soll_vza
@@ -1104,7 +1097,6 @@ with tab_pavo:
     st.divider()
     st.subheader("3. Prozentuale Aufteilung nach Berufsgruppen (StPAVO Qualifikations-Mix: SOLL vs. IST)")
 
-    # IST VZÄ & Prozente nach Rollen berechnen
     vza_dgkp_ist = df_team_curr[df_team_curr["Rolle"].isin(["DGKP", "Leitung"])]["Wochenstd"].sum() / 37.0
     vza_pfa_ist = df_team_curr[df_team_curr["Rolle"] == "PFA"]["Wochenstd"].sum() / 37.0
     vza_pa_ist = df_team_curr[df_team_curr["Rolle"] == "Pflegeassistenz"]["Wochenstd"].sum() / 37.0
@@ -1149,7 +1141,7 @@ with tab_pavo:
             "IST (VZÄ)": round(vza_pa_ist, 2),
             "Differenz (VZÄ)": round(vza_pa_ist - soll_pa_vza, 2),
             "Täglich im Tagdienst (Hausweit)": f"ca. {max(2, int(round((empf_b + empf_h) * (pct_pa / 100.0))))} Pers./Tag",
-            "StPAVO Status": "🟢 Erfüllt" if (pct_dgkp_ist + pct_pfa_ist + pct_pa_ist) >= (pct_dgkp + pct_pfa + pct_pa - 1.0) else "🔴 Pflege-Quote (<80%) prüfen"
+            "StPAVO Status": "🟢 Erfüllt" if (pct_dgkp_ist + pct_pfa_ist + pct_pa_ist) >= (pct_dgkp + pct_pfa + pct_pa - 1.0) else "🔴 Pflege-Quote prüfen"
         },
         {
             "Berufsgruppe (StPAVO Steiermark)": "🍽️ Heimhilfe (HH)",
@@ -1159,23 +1151,21 @@ with tab_pavo:
             "IST (VZÄ)": round(vza_hh_ist, 2),
             "Differenz (VZÄ)": round(vza_hh_ist - soll_hh_vza, 2),
             "Täglich im Tagdienst (Hausweit)": f"max. {max(1, int(round((empf_b + empf_h) * (pct_hh / 100.0))))} Pers./Tag",
-            "StPAVO Status": "🟢 Gesetzestreu (≤ Max)" if pct_hh_ist <= pct_hh + 1.0 else "⚠️ Über Max.-Quote (Max. 20%)"
+            "StPAVO Status": "🟢 Gesetzestreu" if pct_hh_ist <= pct_hh + 1.0 else "⚠️ Über Max.-Quote (Max. 20%)"
         }
     ])
     st.dataframe(qual_mix_df, use_container_width=True, hide_index=True)
 
-# --- TAB 4: KOMPAKTER MONATSKALENDER (GETEILTE KLEINERE TABELLEN FÜR BESSERE ÜBERSICHT) ---
 with tab3:
     st.header("🗓️ 4. Kompakt-Kalender für Urlaub, Wünsche & Fix-Dienste (Monatsübersicht)")
     st.markdown(
-        "**Kompakt-Design für volle Monatsübersicht:** Die Tabellen sind nun in **kleinere Stations-Blöcke (Abteilung B, H, F)** unterteilt "
+        "**Kompakt-Design für volle Monatsübersicht:** Die Tabellen sind in **kleinere Stations-Blöcke (Abteilung B, H, F)** unterteilt "
         "und nutzen kurze 3-Buchstaben-Codes (`URL`, `KRA`, `ZA`, `SU`, `ENT`, `WUN`, `MUS` oder Schichtkürzel wie `F2`, `X7`, `N1`), "
         "damit **alle 31 Tage nebeneinander auf den Bildschirm passen**!"
     )
     
     current_staff = st.session_state.staff_df_v69["Name"].dropna().astype(str).str.strip().tolist()
     
-    # Ultra-kompakte Spaltenüberschriften (damit 31 Tage ohne langes Scrollen passen)
     day_cols = []
     weekend_or_hol_days = []
     for d in range(1, num_days + 1):
@@ -1374,7 +1364,9 @@ with tab3:
                 height=row_h,
                 key=f"cal_ed_{block_key}_{st.session_state.cal_editor_ver}"
             )
-        cleaned_sub = edited_sub_cal.applymap(normalize_cal_cell)
+        cleaned_sub = edited_sub_cal.copy()
+        for c_col in cleaned_sub.columns:
+            cleaned_sub[c_col] = cleaned_sub[c_col].map(normalize_cal_cell)
         if not cleaned_sub.equals(sub_cal):
             st.session_state.abs_matrix_v69.loc[staff_subset, day_cols] = cleaned_sub[day_cols].values
             st.session_state.raw_uploaded_cal = st.session_state.abs_matrix_v69.copy()
@@ -2200,14 +2192,14 @@ with tab6:
                 "- **Absolutes Nachtarbeitsverbot (§ 6 MSchG):** Werdende und stillende Mütter dürfen zwischen **20:00 und 06:00 Uhr** nicht beschäftigt werden.\n"
                 "- **Sonn- und Feiertagsverbot (§ 7 MSchG):** An Sonn- und gesetzlichen Feiertagen besteht Beschäftigungsverbot.\n"
                 "- **Verbot von Überstunden & Langdiensten (§ 8 MSchG):** Tagesarbeitszeit darf **9,0 Stunden** und Wochenarbeitszeit **40,0 Stunden** keinesfalls überschreiten.\n"
-                "- **Körperliche Schonung (§ 4 MSchG):** Verbot von schwerem Heben (> 5 kg regelmäßig / > 10 kg gelegentlich) sowie Schutz vor Infektionsgefahren."
+                "- **Körperliche Schonung (§ 4 MSchG):** Verbot von schwerem Heben (mehr als 5 kg regelmäßig / mehr als 10 kg gelegentlich) sowie Schutz vor Infektionsgefahren."
             )
         with st.expander("⏳ 2. Altersteilzeit (§ 27 AlVG & SWÖ-KV) & Elternteilzeit (MSchG/VKG)", expanded=True):
             st.markdown(
                 "- **Altersteilzeit (ATZ - § 27 AlVG):** Reduktion der Normalarbeitszeit auf **40 % bis 60 %** der vorherigen Arbeitszeit (z. B. bei 37h Vollzeit: **14,8h bis 22,2h/Woche**).\n"
                 "- **Lohnausgleich & Sozialversicherung:** Arbeitnehmer erhält 50 % des Entgeltverlustes als Lohnausgleich (also **70 % bis 80 % des Letztgehalts**) bei **100 % Pensions-, Kranken- und Arbeitslosenversicherungsbeitragsgrundlage**.\n"
                 "- **Mehrarbeits-Schutz in ATZ:** Regelmäßige Überstunden über die Geringfügigkeitsgrenze gefährden das AMS-Altersteilzeitgeld – die KI sperrt daher den Überstundenaufbau für ATZ-Mitarbeiter!\n"
-                "- **Elternteilzeit (ETZ - §§ 15h ff MSchG / VKG):** Rechtsanspruch in Betrieben ab 21 Mitarbeitern (bei ≥ 3 Jahren Betriebszugehörigkeit). Vereinbarte Wochentage (`MO`–`SO`) sind verbindlich."
+                "- **Elternteilzeit (ETZ - §§ 15h ff MSchG / VKG):** Rechtsanspruch in Betrieben ab 21 Mitarbeitern (bei mind. 3 Jahren Betriebszugehörigkeit). Vereinbarte Wochentage (`MO`–`SO`) sind verbindlich."
             )
         with st.expander("🏥 3. StPBG & StPAVO Steiermark (Personalschlüssel & Grade-Mix)", expanded=True):
             st.markdown(
