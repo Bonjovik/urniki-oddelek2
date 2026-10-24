@@ -9,17 +9,18 @@ from ortools.sat.python import cp_model
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="KI-Dienstplan PRO 70.0", layout="wide")
+st.set_page_config(page_title="KI-Dienstplan PRO 73.0", layout="wide")
 
-st.title("🏥 KI-Dienstplan System (Version 70.0 - Station-Focus & Cross-Coverage Edition)")
+st.title("🏥 KI-Dienstplan System (Version 73.0 - Smart Urlaubs-Kontingent & Wunsch-Hierarchie)")
 st.markdown(
-    "**System-Architektur (Stations-Fokus B/H/F & Automatische Springer-Markierung):** \n"
-    "- 🔵 **Abteilung B Fokus:** Täglich **4 bis 5 PA/PFA** (`F2`/`F7`) + **1 Heimhelfer (`JED`)** + **1 DGKP** (`X7`/`X6`/`X4`).\n"
-    "- 🟢 **Abteilung H Fokus & Springer-Anzeige:** Täglich **4 PA/PFA/HH** + **1 DGKP**. Hilft jemand von Abt. B oder F auf H aus, steht bei B automatisch **`F2 ➔ H`** und auf H erscheint die Zeile **`🤝 Aushilfe: ⬅️ Name (F2)`**!\n"
-    "- 🟣 **Abteilung F (Nacht-Priorität + Tag-Flex):** DGKPs auf F decken primär die Nacht (`N1`) ab; Mitarbeiter ohne `Nur_Nacht` füllen ihre restlichen Soll-Stunden mit Tagdiensten (`X7`/`X6`/`X4`) zur Unterstützung auf B & H auf."
+    "**System-Architektur (4-Stufen Urlaubs-/Wunsch-Algorithmus, Live-Kontingent-Ampel & Auto-ZA):** \n"
+    "- 🚦 **NEU in Tab 4 – Live-Urlaubs-Kontingent-Ampel:** Prüft für jeden Tag (`1.`–`31.`), ob das Limit (**max. 2 pro Station**, **max. 1 DGKP/Station**, **max. 1 HH**, **max. 1 auf Abt. F**) eingehalten wird.\n"
+    "- 🧠 **NEU – 4-Stufen KI-Hierarchie:** `1. URL/KRA/SU/FO` (100% Fix) ➔ `2. ENT` (Entlastung mit Block-Frei-Bonus) ➔ `3. ZA` (Stundenabbau + Auto-ZA-Generator) ➔ `4. WUN` (Wunsch-Frei mit fairem Kollisions-Richter).\n"
+    "- 🖨️ **Geocon & Druck-Studio (Tab 6):** Druckfertiger A4-Aushangplan, Lohnarten-Matrix & 1-Klick-Monatsabschluss."
 )
 
 PAID_ABSENCES = ["URL", "SU", "ENT", "KRA", "PFLEGE", "FO"]
+HARD_ABSENCES = ["URL", "SU", "ENT", "KRA", "PFLEGE", "FO", "ZA"]
 GESETZ_STATUS_OPTIONS = [
     "Normal",
     "Altersteilzeit (ATZ)",
@@ -29,6 +30,10 @@ GESETZ_STATUS_OPTIONS = [
     "Nachtschwerarbeit (NSchG)"
 ]
 ROLE_OPTIONS = ["Leitung", "DGKP", "PFA", "Pflegeassistenz", "Heimhelfer"]
+MONTH_NAMES_DE = [
+    "Januar", "Februar", "März", "April", "Mai", "Juni", 
+    "Juli", "August", "September", "Oktober", "November", "Dezember"
+]
 
 DEFAULT_PAVO_KEYS = {
     "Stufe_0": 24.0,
@@ -110,17 +115,17 @@ def sanitize_shifts_df(df):
     cols = ["Kürzel", "Bezeichnung", "Stunden", "Typ", "Erlaubt_DGKP", "Erlaubt_PFA", "Erlaubt_PA", "Erlaubt_HH"]
     return df[cols].reset_index(drop=True)
 
-if "shifts_df_v70" not in st.session_state:
+if "shifts_df_v73" not in st.session_state:
     if os.path.exists("shifts_data.csv"):
         try:
             with open("shifts_data.csv", "rb") as f:
-                st.session_state.shifts_df_v70 = sanitize_shifts_df(read_csv_smart(f.read(), is_index_col=False))
+                st.session_state.shifts_df_v73 = sanitize_shifts_df(read_csv_smart(f.read(), is_index_col=False))
         except Exception:
-            st.session_state.shifts_df_v70 = get_default_shifts_df()
+            st.session_state.shifts_df_v73 = get_default_shifts_df()
     else:
-        st.session_state.shifts_df_v70 = get_default_shifts_df()
+        st.session_state.shifts_df_v73 = get_default_shifts_df()
 
-SHIFTS_DF_CURRENT = sanitize_shifts_df(st.session_state.shifts_df_v70)
+SHIFTS_DF_CURRENT = sanitize_shifts_df(st.session_state.shifts_df_v73)
 SHIFTS_HUNDREDTHS = {
     row["Kürzel"]: int(round(float(row["Stunden"]) * 100)) 
     for _, row in SHIFTS_DF_CURRENT.iterrows()
@@ -144,11 +149,11 @@ PA_PFA_DAY_SHIFTS = SHIFTS_DF_CURRENT[
 MANUAL_SHIFT_CODES = SHIFTS_DF_CURRENT["Kürzel"].tolist()
 
 def extract_base_shift(val_str):
-    """Extrahiert das reine Schichtkürzel aus Zellen wie 'F2 ➔ H', '🚨 F2' oder '⬅️ PA B-1 (F2)'."""
+    """Extrahiert das reine Schichtkürzel aus Zellen wie 'F2 ➔ H', '*F2', '🚨 F2' oder '⬅️ PA B-1 (F2)'."""
     s = str(val_str).strip().upper()
     if s.startswith("⬅️"):
         return "AUSHILFE_INFO"
-    s = s.replace("🚨", "").replace("📌", "").strip()
+    s = s.replace("🚨", "").replace("📌", "").replace("*", "").strip()
     if "➔" in s:
         s = s.split("➔")[0].strip()
     elif "->" in s:
@@ -161,14 +166,14 @@ def get_default_pavo_df():
         {"Abteilung": "Abteilung H", "Stufe_0": 0, "Stufe_1": 1, "Stufe_2": 4, "Stufe_3": 7, "Stufe_4": 6, "Stufe_5": 4, "Stufe_6": 1, "Stufe_7": 1},
     ])
 
-if "pavo_df_v70" not in st.session_state:
+if "pavo_df_v73" not in st.session_state:
     if os.path.exists("pavo_data.csv"):
         try:
-            st.session_state.pavo_df_v70 = pd.read_csv("pavo_data.csv")
+            st.session_state.pavo_df_v73 = pd.read_csv("pavo_data.csv")
         except Exception:
-            st.session_state.pavo_df_v70 = get_default_pavo_df()
+            st.session_state.pavo_df_v73 = get_default_pavo_df()
     else:
-        st.session_state.pavo_df_v70 = get_default_pavo_df()
+        st.session_state.pavo_df_v73 = get_default_pavo_df()
 
 def sanitize_team_df(df):
     df = df.copy()
@@ -248,8 +253,9 @@ def sanitize_team_df(df):
 def resolve_allowed_shifts_for_person(s, shifts_df):
     """
     Ermittelt erlaubte Schichten pro Person:
-    - PA und PFA arbeiten strikt F2, F7 und N2 (bzw. im Dienste-Studio explizit freigegebene PA/PFA-Schichten).
-    - Abteilung F DGKPs machen primär N1, aber wenn Nur_Nacht == False ist, dürfen sie auch Tagdienste (X7, X6, X4) arbeiten.
+    - REGEL 1: Abteilung F ist AUSSCHLIESSLICH für Nachtdienste (N1 / N2) vorgesehen!
+    - REGEL 2: PA und PFA arbeiten strikt F2, F7 und N2.
+    - REGEL 3: Heimhelfer (HH) arbeiten JED (Priorität 1) und als Pflege-Unterstützung F2/F7/MS/SM.
     """
     allowed_shifts = ["OFF"]
     nur_nacht = bool(s.get("Nur_Nacht", False))
@@ -261,6 +267,18 @@ def resolve_allowed_shifts_for_person(s, shifts_df):
 
     day_df = shifts_df[shifts_df["Typ"] != "Nachtdienst"]
     night_df = shifts_df[shifts_df["Typ"] == "Nachtdienst"]
+
+    if abt == "Abteilung F":
+        if gesetz == "Mutterschutz (MSchG)":
+            return ["OFF"]
+        if rolle in ["DGKP", "Leitung"]:
+            dg_nights = night_df[night_df["Erlaubt_DGKP"] == True]["Kürzel"].tolist()
+            allowed_shifts.extend(dg_nights if dg_nights else ["N1"])
+        elif rolle in ["PFA", "Pflegeassistenz"]:
+            role_col = "Erlaubt_PFA" if rolle == "PFA" else "Erlaubt_PA"
+            pa_nights = night_df[night_df[role_col] == True]["Kürzel"].tolist()
+            allowed_shifts.extend(pa_nights if pa_nights else ["N2"])
+        return list(set(allowed_shifts))
 
     if gesetz == "Mutterschutz (MSchG)":
         if rolle in ["DGKP", "Leitung"]:
@@ -293,34 +311,38 @@ def resolve_allowed_shifts_for_person(s, shifts_df):
                 allowed_shifts.extend(pa_chosen if pa_chosen else pa_valid_day)
             else:
                 allowed_shifts.extend(pa_valid_day)
-        if max_n > 0 or nur_nacht or abt == "Abteilung F":
+        if max_n > 0 or nur_nacht:
             pa_nights = night_df[night_df[role_col] == True]["Kürzel"].tolist()
             allowed_shifts.extend(pa_nights if pa_nights else ["N2"])
+        return list(set(allowed_shifts))
+
+    if rolle == "Heimhelfer":
+        if not nur_nacht:
+            hh_days = day_df[day_df["Erlaubt_HH"] == True]["Kürzel"].tolist()
+            if not hh_days:
+                hh_days = ["JED", "F2", "F7"]
+            if explicit_day_codes:
+                allowed_shifts.extend(explicit_day_codes)
+                if "JED" in day_df["Kürzel"].values and "JED" not in allowed_shifts:
+                    allowed_shifts.append("JED")
+                if spez == "JED":
+                    for c_help in ["F2", "F7"]:
+                        if c_help in day_df["Kürzel"].values and c_help not in allowed_shifts:
+                            allowed_shifts.append(c_help)
+            else:
+                allowed_shifts.extend(hh_days)
         return list(set(allowed_shifts))
 
     if not nur_nacht:
         if explicit_day_codes:
             allowed_shifts.extend(explicit_day_codes)
-            if spez == "JED" and rolle == "Heimhelfer":
-                hh_backs = [c for c in ["F2", "F7"] if c in day_df["Kürzel"].values]
-                allowed_shifts.extend(hh_backs)
         else:
-            if rolle in ["DGKP", "Leitung"]:
-                dg_days = day_df[day_df["Erlaubt_DGKP"] == True]["Kürzel"].tolist()
-                allowed_shifts.extend(dg_days if dg_days else ["X4", "X6", "X7"])
-            else:
-                hh_days = day_df[day_df["Erlaubt_HH"] == True]["Kürzel"].tolist()
-                allowed_shifts.extend(hh_days if hh_days else ["JED", "F2", "F7"])
+            dg_days = day_df[day_df["Erlaubt_DGKP"] == True]["Kürzel"].tolist()
+            allowed_shifts.extend(dg_days if dg_days else ["X4", "X6", "X7"])
 
-    # Nachtschicht-Zuweisung (Auf Abteilung F dürfen DGKPs immer N1 machen, auch wenn Max_Nacht versehentlich 0 war)
-    if (max_n > 0 or nur_nacht or abt == "Abteilung F") and rolle != "Leitung":
-        if rolle == "DGKP":
-            dg_nights = night_df[night_df["Erlaubt_DGKP"] == True]["Kürzel"].tolist()
-            allowed_shifts.extend(dg_nights if dg_nights else ["N1"])
-        else:
-            hh_nights = night_df[night_df["Erlaubt_HH"] == True]["Kürzel"].tolist()
-            if hh_nights:
-                allowed_shifts.extend(hh_nights)
+    if (max_n > 0 or nur_nacht) and rolle == "DGKP":
+        dg_nights = night_df[night_df["Erlaubt_DGKP"] == True]["Kürzel"].tolist()
+        allowed_shifts.extend(dg_nights if dg_nights else ["N1"])
 
     return list(set(allowed_shifts))
 
@@ -346,13 +368,91 @@ def normalize_cal_cell(val):
     if "MUS" in s_clean: return "MUS"
     return s_clean[:4]
 
+def build_vacation_quota_summary_df(cal_df, staff_df, day_cols, max_per_station=2):
+    """
+    Erzeugt die Live-Urlaubs- & Wunsch-Kontingent-Ampel für Tab 4:
+    Zeigt pro Tag (1. bis 31.), wie viele Personen pro Station/Berufsgruppe bereits verplant sind.
+    """
+    dept_map = {}
+    role_map = {}
+    for _, r in staff_df.iterrows():
+        n = str(r["Name"]).strip()
+        dept_map[n] = str(r["Abteilung"]).strip()
+        role_map[n] = str(r["Rolle"]).strip()
+
+    row_b = {"Kontingent-Check": f"🔵 Abt. B Fix-Abwesend (Max. {max_per_station})"}
+    row_h = {"Kontingent-Check": f"🟢 Abt. H Fix-Abwesend (Max. {max_per_station})"}
+    row_dgkp = {"Kontingent-Check": "🩺 DGKP B+H Abwesend (Max. 2)"}
+    row_hh = {"Kontingent-Check": "🍽️ Heimhilfe Abwesend (Max. 1!)"}
+    row_f = {"Kontingent-Check": "🟣 Abt. F Nachtpool Abwesend (Max. 1)"}
+    row_wun = {"Kontingent-Check": "🟢 Zusatz Wunsch-Frei (WUN Gesamt)"}
+
+    for c in day_cols:
+        b_abs, h_abs, dg_abs, hh_abs, f_abs, wun_tot = 0, 0, 0, 0, 0, 0
+        for emp in cal_df.index:
+            val = normalize_cal_cell(cal_df.at[emp, c])
+            if not val:
+                continue
+            abt = dept_map.get(emp, "Abteilung B")
+            rol = role_map.get(emp, "Pflegeassistenz")
+
+            if val == "WUN":
+                wun_tot += 1
+            elif val in ["URL", "SU", "ENT", "KRA", "ZA", "PFL", "FO"]:
+                if abt == "Abteilung B":
+                    b_abs += 1
+                elif abt == "Abteilung H":
+                    h_abs += 1
+                elif abt == "Abteilung F":
+                    f_abs += 1
+
+                if rol in ["DGKP", "Leitung"] and abt in ["Abteilung B", "Abteilung H"]:
+                    dg_abs += 1
+                elif rol == "Heimhelfer":
+                    hh_abs += 1
+
+        row_b[c] = b_abs
+        row_h[c] = h_abs
+        row_dgkp[c] = dg_abs
+        row_hh[c] = hh_abs
+        row_f[c] = f_abs
+        row_wun[c] = wun_tot
+
+    return pd.DataFrame([row_b, row_h, row_dgkp, row_hh, row_f, row_wun])
+
+def style_vacation_quota_df(df_q, max_per_station=2):
+    def color_q_row(row):
+        kat = str(row["Kontingent-Check"])
+        styles = ["font-weight: bold; background-color: #f8f9fa; color: #212529;"]
+        limit = max_per_station
+        if "Max. 1" in kat:
+            limit = 1
+        elif "Max. 2" in kat:
+            limit = 2
+
+        for col in df_q.columns[1:]:
+            val = int(row[col])
+            if "Wunsch-Frei" in kat:
+                if val >= 5:
+                    styles.append("background-color: #fff3cd; color: #856404; font-weight: bold; text-align: center;")
+                else:
+                    styles.append("background-color: #eef2f7; color: #333; text-align: center;")
+            else:
+                if val > limit:
+                    styles.append("background-color: #f8d7da; color: #721c24; font-weight: bold; text-align: center; border: 1px solid #f5c6cb;")
+                elif val == limit:
+                    styles.append("background-color: #fff3cd; color: #856404; font-weight: bold; text-align: center;")
+                else:
+                    styles.append("background-color: #d4edda; color: #155724; font-weight: bold; text-align: center;")
+        return styles
+    return df_q.style.apply(color_q_row, axis=1)
+
 def recalculate_plan_df(df_plan, staff_df, num_days):
     """
     Berechnet SOLL, IST, ÜBERSTD. und SALDO für alle Zeilen neu und erzeugt automatisch
-    die grünen '🤝 Aushilfe von B/F' bzw. '🤝 Aushilfe von H/F' Zeilen auf der Zielstation!
+    die grünen '🤝 Aushilfe von Abt. B' bzw. '🤝 Aushilfe von Abt. H' Zeilen auf der Zielstation!
     """
     df_out = df_plan.copy()
-    # Alte Aushilfe-Info-Zeilen zuerst entfernen, damit sie sauber neu generiert werden
     df_out = df_out[~df_out["Mitarbeiter"].astype(str).str.startswith("🤝 Aushilfe")].reset_index(drop=True)
     day_cols_plan = [f"{d}." for d in range(1, num_days + 1) if f"{d}." in df_out.columns]
     
@@ -415,7 +515,7 @@ def recalculate_plan_df(df_plan, staff_df, num_days):
                 if clean_v == "PFL": clean_v = "PFLEGE"
                 if clean_v == "WUN": clean_v = "WUNSCH"
                 if clean_v == "MUS": clean_v = "MUSS"
-                if "➔" not in clean_v:
+                if "➔" not in clean_v and not clean_v.startswith("*"):
                     for code in ["URL", "SU", "ENT", "KRA", "ZA", "PFLEGE", "FO", "WUNSCH", "MUSS"]:
                         if code == clean_v or clean_v.startswith(code + " "):
                             clean_v = code
@@ -444,13 +544,12 @@ def recalculate_plan_df(df_plan, staff_df, num_days):
         
     df_cleaned = df_out.loc[rows_to_keep].reset_index(drop=True)
 
-    # Füge auf Abteilung B und H automatisch eine sichtbare Aushilfe-Zeile hinzu, falls jemand von außen einspringt
     extra_aushilfe_rows = []
     if any(len(v) > 0 for v in aushilfe_for_b.values()):
         row_b_help = {
             "Abteilung": "Abteilung B",
             "Rolle": "Springer",
-            "Mitarbeiter": "🤝 Aushilfe von H / F",
+            "Mitarbeiter": "🤝 Aushilfe von Abt. H",
             "SOLL": 0.0, "IST": 0.0, "ÜBERSTD.": 0.0, "SALDO": 0.0
         }
         for c in day_cols_plan:
@@ -461,7 +560,7 @@ def recalculate_plan_df(df_plan, staff_df, num_days):
         row_h_help = {
             "Abteilung": "Abteilung H",
             "Rolle": "Springer",
-            "Mitarbeiter": "🤝 Aushilfe von B / F",
+            "Mitarbeiter": "🤝 Aushilfe von Abt. B",
             "SOLL": 0.0, "IST": 0.0, "ÜBERSTD.": 0.0, "SALDO": 0.0
         }
         for c in day_cols_plan:
@@ -474,10 +573,7 @@ def recalculate_plan_df(df_plan, staff_df, num_days):
     return df_cleaned
 
 def build_coverage_summary_df(full_df, dept_name, num_days, min_b=4, min_h=4):
-    """
-    Erstellt die Kontrollzeilen unter den Tabellen und berücksichtigt dabei exakt die Springer ('➔ H' / '➔ B'):
-    - Wer 'F2 ➔ H' auf B eingetragen hat, zählt an diesem Tag physisch auf Abteilung H!
-    """
+    """Erstellt die Kontrollzeilen unter den Tabellen inkl. Springer-Anrechnung ('➔ H' / '➔ B')."""
     day_cols_only = [f"{d}." for d in range(1, num_days + 1)]
     real_full = full_df[~full_df["Mitarbeiter"].astype(str).str.contains("X-Oseba|FEHLT|⚠️|🤝 Aushilfe", na=False)]
 
@@ -488,12 +584,12 @@ def build_coverage_summary_df(full_df, dept_name, num_days, min_b=4, min_h=4):
         other_Code = "H" if dept_name == "Abteilung B" else "B"
         min_pa_target = min_b if dept_name == "Abteilung B" else min_h
 
-        row_dgkp = {"Kontroll-Kategorie": f"🩺 DGKP Tag (Min. 1)"}
+        row_dgkp = {"Kontroll-Kategorie": "🩺 DGKP Tag (Min. 1)"}
         if dept_name == "Abteilung B":
-            row_pa = {"Kontroll-Kategorie": f"🏥 PA / PFA Tag (Min. {min_pa_target} | Ideal 5)"}
-            row_jed = {"Kontroll-Kategorie": "🍽️ Heimhelfer / JED (Min. 1)"}
+            row_pa = {"Kontroll-Kategorie": f"🏥 PA / PFA (+ HH-Hilfe) Tag (Min. {min_pa_target} | Ideal 5)"}
+            row_jed = {"Kontroll-Kategorie": "🍽️ Heimhelfer Speisesaal JED (Min. 1 - Pflicht!)"}
         else:
-            row_pa = {"Kontroll-Kategorie": f"🏥 PA / PFA / HH Tag (Min. {min_pa_target})"}
+            row_pa = {"Kontroll-Kategorie": f"🏥 PA / PFA (+ HH-Hilfe) Tag (Min. {min_pa_target})"}
 
         for c in day_cols_only:
             dgkp_present = 0
@@ -510,7 +606,6 @@ def build_coverage_summary_df(full_df, dept_name, num_days, min_b=4, min_h=4):
                 if base_sh not in SHIFTS_HUNDREDTHS or base_sh in ["OFF"] + NIGHT_SHIFTS:
                     continue
 
-                # Bestimme, auf welcher Station dieser Mitarbeiter heute physisch arbeitet
                 if f"➔ {target_Code}" in raw_cell:
                     effective_abt = dept_name
                     is_incoming_springer = True
@@ -521,6 +616,10 @@ def build_coverage_summary_df(full_df, dept_name, num_days, min_b=4, min_h=4):
                     effective_abt = emp_abt
                     is_incoming_springer = False
 
+                if base_sh == "JED":
+                    jed_present += 1
+                    continue
+
                 if effective_abt != dept_name:
                     continue
 
@@ -529,8 +628,6 @@ def build_coverage_summary_df(full_df, dept_name, num_days, min_b=4, min_h=4):
 
                 if emp_role in ["DGKP", "Leitung"] and base_sh in DGKP_DAY_SHIFTS:
                     dgkp_present += 1
-                elif base_sh == "JED":
-                    jed_present += 1
                 elif base_sh in DAY_CARE_SHIFTS:
                     pa_present += 1
 
@@ -548,19 +645,13 @@ def build_coverage_summary_df(full_df, dept_name, num_days, min_b=4, min_h=4):
             summary_rows.append(row_jed)
 
     else:
-        real_f = real_full[real_full["Abteilung"] == "Abteilung F"]
-        row_f_day = {"Kontroll-Kategorie": "🤝 F-DGKP/PA im Tagdienst (auf B/H)"}
         row_n1 = {"Kontroll-Kategorie": "🌙 Hausweit N1 - DGKP (Exakt 1)"}
         row_n2 = {"Kontroll-Kategorie": "🌙 Hausweit N2 - PFA/PA (Exakt 1)"}
         for c in day_cols_only:
-            vals_f = [extract_base_shift(v) for v in real_f[c].astype(str).tolist()]
-            row_f_day[c] = sum(1 for v in vals_f if v in DAY_CARE_SHIFTS)
-            
             vals_all = [extract_base_shift(v) for v in real_full[c].astype(str).tolist()]
             row_n1[c] = sum(1 for v in vals_all if v == "N1")
             row_n2[c] = sum(1 for v in vals_all if v == "N2")
             
-        summary_rows.append(row_f_day)
         summary_rows.append(row_n1)
         summary_rows.append(row_n2)
 
@@ -611,8 +702,289 @@ def style_coverage_summary(df_sum):
 
     return df_sum.style.apply(color_row, axis=1)
 
+# --- GEOCON ZUSCHLÄGE-MATRIX & DRUCKGENERATOR (HTML / PDF READY) ---
+def build_geocon_zuschlaege_df(df_plan, staff_df, num_days, leto, mesec, first_day_weekday, at_holidays):
+    """Berechnet die monatliche Geocon Lohnarten- & Zuschläge-Matrix (SWÖ-KV / Steiermark)."""
+    day_cols_only = [f"{d}." for d in range(1, num_days + 1) if f"{d}." in df_plan.columns]
+    real_df = df_plan[~df_plan["Mitarbeiter"].astype(str).str.contains("X-Oseba|FEHLT|⚠️|🤝 Aushilfe", na=False)].copy()
+
+    url_lookup = {}
+    status_lookup = {}
+    for _, s_r in staff_df.iterrows():
+        b_n = str(s_r["Name"]).strip().lower()
+        url_lookup[b_n] = float(s_r.get("URL_Rest", 25.0))
+        status_lookup[b_n] = str(s_r.get("Gesetz_Status", "Normal")).strip()
+
+    rows = []
+    for _, r in real_df.iterrows():
+        emp_disp = str(r["Mitarbeiter"]).strip()
+        base_emp = emp_disp.split(" (")[0].strip().lower()
+        url_rest_alt = url_lookup.get(base_emp, 25.0)
+        gesetz_st = status_lookup.get(base_emp, "Normal")
+
+        nacht_dienste = 0
+        nacht_std_100 = 0
+        so_std_100 = 0
+        ft_std_100 = 0
+        sa_dienste = 0
+        springer_tage = 0
+        url_tage = 0
+        ent_tage = 0
+        kra_tage = 0
+        za_tage = 0
+        fo_tage = 0
+
+        for d_idx, c in enumerate(day_cols_only):
+            raw_v = str(r[c]).strip().upper()
+            base_sh = extract_base_shift(raw_v)
+            dow = (d_idx + first_day_weekday) % 7
+            is_hol = (date(leto, mesec, d_idx + 1) in at_holidays) or (mesec == 12 and (d_idx + 1 in [24, 31]))
+
+            if "➔" in raw_v:
+                springer_tage += 1
+
+            if base_sh == "URL":
+                url_tage += 1
+            elif base_sh == "ENT":
+                ent_tage += 1
+            elif base_sh == "KRA":
+                kra_tage += 1
+            elif base_sh == "ZA":
+                za_tage += 1
+            elif base_sh == "FO":
+                fo_tage += 1
+            elif base_sh in SHIFTS_HUNDREDTHS and base_sh != "OFF":
+                sh_dur = SHIFTS_HUNDREDTHS[base_sh]
+                if base_sh in NIGHT_SHIFTS:
+                    nacht_dienste += 1
+                    nacht_std_100 += sh_dur
+                if is_hol:
+                    ft_std_100 += sh_dur
+                elif dow == 6:
+                    so_std_100 += sh_dur
+                elif dow == 5:
+                    sa_dienste += 1
+
+        saldo_val = float(r.get("SALDO", 0.0))
+        if saldo_val > 25.0:
+            ampel = "🔴 Über Limit (>+25h)"
+        elif saldo_val > 12.0:
+            ampel = "🟡 Erhöht (+12h bis +25h)"
+        elif saldo_val < -15.0:
+            ampel = "🔴 Starkes Minus (<-15h)"
+        else:
+            ampel = "🟢 Im Zielkorridor"
+
+        rows.append({
+            "Mitarbeiter": emp_disp,
+            "Abteilung": r["Abteilung"],
+            "Rolle": r["Rolle"],
+            "Status": gesetz_st,
+            "SOLL (h)": r["SOLL"],
+            "IST (h)": r["IST"],
+            "ÜBERSTD. (h)": r["ÜBERSTD."],
+            "SALDO Neu (h)": saldo_val,
+            "Zeitkonto-Ampel": ampel,
+            "🌙 Nachtdienste (Anz.)": nacht_dienste,
+            "🌙 Nacht-Stunden (h)": round(nacht_std_100 / 100.0, 2),
+            "☀️ SO-Stunden (Zuschlag)": round(so_std_100 / 100.0, 2),
+            "⭐ FT-Stunden (Feiertag)": round(ft_std_100 / 100.0, 2),
+            "📅 SA-Dienste (Anz.)": sa_dienste,
+            "🤝 Springer-Tage (➔)": springer_tage,
+            "🏝️ URL verbraucht": url_tage,
+            "🏝️ URL Rest Neu": round(max(0.0, url_rest_alt - url_tage), 1),
+            "🟣 ENT Tage": ent_tage,
+            "⚫ ZA Tage": za_tage,
+            "🔵 KRA Tage": kra_tage,
+            "🎓 FO Tage": fo_tage
+        })
+    return pd.DataFrame(rows)
+
+def generate_printable_aushang_html(df_plan, num_days, leto, mesec, first_day_weekday, at_holidays, min_b=4, min_h=4):
+    """Erzeugt einen druckfertigen A4-Querformat HTML-Aushangplan für das Schwarze Brett (Abt. B, H, F)."""
+    monat_str = MONTH_NAMES_DE[mesec - 1]
+    dow_short = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+
+    html_parts = [f"""<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Dienstplan {monat_str} {leto}</title>
+<style>
+    @page {{ size: A4 landscape; margin: 8mm; }}
+    body {{ font-family: Arial, Helvetica, sans-serif; font-size: 9pt; color: #111; margin: 0; padding: 10px; }}
+    h1 {{ font-size: 14pt; margin: 0 0 4px 0; color: #1e3a8a; }}
+    h2 {{ font-size: 11pt; margin: 12px 0 4px 0; padding: 4px 8px; background: #e9ecef; border-left: 5px solid #1e3a8a; }}
+    .meta {{ font-size: 8.5pt; color: #444; margin-bottom: 8px; }}
+    table {{ width: 100%; border-collapse: collapse; margin-bottom: 10px; table-layout: fixed; }}
+    th, td {{ border: 1px solid #888; padding: 2px 1px; text-align: center; font-size: 7.5pt; overflow: hidden; white-space: nowrap; }}
+    th.name-col, td.name-col {{ width: 135px; text-align: left; padding-left: 4px; font-weight: bold; }}
+    th.role-col, td.role-col {{ width: 58px; text-align: left; padding-left: 3px; font-size: 7pt; }}
+    th.sum-col, td.sum-col {{ width: 34px; font-weight: bold; background: #f8f9fa; }}
+    .we-col {{ background-color: #ececf4; }}
+    .hol-col {{ background-color: #fff0f0; }}
+    .sh-night {{ background-color: #1e3a8a !important; color: #fff !important; font-weight: bold; }}
+    .sh-springer {{ background-color: #d4edda !important; color: #005c15 !important; font-weight: bold; border: 1.5px solid #28a745; }}
+    .sh-url {{ background-color: #d1ecf1 !important; color: #0c5460 !important; font-weight: bold; }}
+    .sh-kra {{ background-color: #f8d7da !important; color: #721c24 !important; font-weight: bold; }}
+    .sh-za {{ background-color: #343a40 !important; color: #fff !important; font-weight: bold; }}
+    .sh-alarm {{ background-color: #ffcccc !important; color: #cc0000 !important; font-weight: bold; }}
+    .sig-box {{ display: flex; justify-content: space-between; margin-top: 18px; padding-top: 8px; font-size: 9pt; }}
+    .sig-line {{ width: 28%; border-top: 1px solid #333; padding-top: 4px; text-align: center; }}
+    @media print {{
+        .no-print {{ display: none; }}
+        body {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+    }}
+</style>
+</head>
+<body>
+<div class="no-print" style="background:#eef2ff;padding:10px;margin-bottom:12px;border:1px solid #1e3a8a;border-radius:6px;">
+    <strong>🖨️ Druck-Vorschau:</strong> Drücke jetzt <strong>Strg + P</strong> (oder klicke auf <button onclick="window.print()" style="padding:4px 10px;font-weight:bold;cursor:pointer;">🖨️ Jetzt drucken / Als PDF speichern</button>), wähle <em>Querformat (Landscape)</em> und <em>Hintergrundgrafiken drucken</em>.
+</div>
+<h1>🏥 Offizieller Dienstplan – {monat_str} {leto}</h1>
+<div class="meta">Steiermark StPAVO & KA-AZG/SWÖ-KV zertifiziert | Legende: <strong>X7/X6/X4</strong> = DGKP Tag | <strong>F2/F7</strong> = PFA/PA Tag | <strong>JED</strong> = Speisesaal | <strong>N1/N2</strong> = Nacht | <strong>➔ H / ➔ B</strong> = Stations-Aushilfe</div>
+"""]
+
+    for dept_name in ["Abteilung B", "Abteilung H", "Abteilung F"]:
+        sub_df = df_plan[df_plan["Abteilung"] == dept_name].copy()
+        if sub_df.empty:
+            continue
+
+        html_parts.append(f"<h2>{dept_name} – Monatsübersicht ({monat_str} {leto})</h2>")
+        html_parts.append("<table><thead><tr>")
+        html_parts.append('<th class="role-col">Rolle</th><th class="name-col">Mitarbeiter</th>')
+
+        for d in range(1, num_days + 1):
+            dow = (d - 1 + first_day_weekday) % 7
+            is_hol = (date(leto, mesec, d) in at_holidays) or (mesec == 12 and d in [24, 31])
+            cls = "hol-col" if is_hol else ("we-col" if dow >= 5 else "")
+            html_parts.append(f'<th class="{cls}">{d}<br><span style="font-size:6.5pt;font-weight:normal;">{dow_short[dow]}</span></th>')
+
+        html_parts.append('<th class="sum-col">SOLL</th><th class="sum-col">IST</th><th class="sum-col">ÜB.</th><th class="sum-col">SALDO</th></tr></thead><tbody>')
+
+        for _, r in sub_df.iterrows():
+            html_parts.append("<tr>")
+            html_parts.append(f'<td class="role-col">{r["Rolle"]}</td>')
+            html_parts.append(f'<td class="name-col">{r["Mitarbeiter"]}</td>')
+            for d in range(1, num_days + 1):
+                c = f"{d}."
+                val = str(r.get(c, "...")).strip()
+                dow = (d - 1 + first_day_weekday) % 7
+                is_hol = (date(leto, mesec, d) in at_holidays) or (mesec == 12 and d in [24, 31])
+                cell_cls = "hol-col" if is_hol else ("we-col" if dow >= 5 else "")
+
+                if extract_base_shift(val) in NIGHT_SHIFTS:
+                    cell_cls = "sh-night"
+                elif "➔" in val or "⬅️" in val:
+                    cell_cls = "sh-springer"
+                elif val == "URL":
+                    cell_cls = "sh-url"
+                elif val == "KRA":
+                    cell_cls = "sh-kra"
+                elif val == "ZA":
+                    cell_cls = "sh-za"
+                elif "🚨" in val:
+                    cell_cls = "sh-alarm"
+
+                disp_val = "" if val == "..." else val
+                html_parts.append(f'<td class="{cell_cls}">{disp_val}</td>')
+
+            html_parts.append(f'<td class="sum-col">{r["SOLL"]:.1f}</td>')
+            html_parts.append(f'<td class="sum-col">{r["IST"]:.1f}</td>')
+            html_parts.append(f'<td class="sum-col">{r["ÜBERSTD."]:.1f}</td>')
+            html_parts.append(f'<td class="sum-col">{r["SALDO"]:.1f}</td>')
+            html_parts.append("</tr>")
+
+        cov_df = build_coverage_summary_df(df_plan, dept_name, num_days, min_b, min_h)
+        for _, c_row in cov_df.iterrows():
+            kat_name = str(c_row["Kontroll-Kategorie"])
+            html_parts.append('<tr><td class="role-col" style="background:#e9ecef;font-weight:bold;">Check</td>')
+            html_parts.append(f'<td class="name-col" style="background:#e9ecef;">{kat_name}</td>')
+            for d in range(1, num_days + 1):
+                c = f"{d}."
+                cv = c_row[c]
+                html_parts.append(f'<td style="background:#f1f3f5;font-weight:bold;">{cv}</td>')
+            html_parts.append('<td colspan="4" style="background:#e9ecef;"></td></tr>')
+
+        html_parts.append("</tbody></table>")
+
+    html_parts.append(f"""
+<div class="sig-box">
+    <div class="sig-line">Datum: {date.today().strftime('%d.%m.%Y')}</div>
+    <div class="sig-line">Unterschrift WBL / Stationsleitung (Uroš Ruis, DGKP)</div>
+    <div class="sig-line">Genehmigung Pflegedienstleitung (PDL)</div>
+</div>
+</body></html>""")
+    return "\n".join(html_parts)
+
+def generate_employee_stundenzettel_html(emp_row, emp_zuschlag_row, num_days, leto, mesec, first_day_weekday, at_holidays):
+    """Erzeugt einen individuellen monatlichen Geocon-Stundennachweis für einen einzelnen Mitarbeiter."""
+    monat_str = MONTH_NAMES_DE[mesec - 1]
+    dow_short = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
+    emp_name = str(emp_row["Mitarbeiter"])
+    abt = str(emp_row["Abteilung"])
+    rolle = str(emp_row["Rolle"])
+
+    rows_html = []
+    for d in range(1, num_days + 1):
+        c = f"{d}."
+        raw_v = str(emp_row.get(c, "...")).strip()
+        base_sh = extract_base_shift(raw_v)
+        dow = (d - 1 + first_day_weekday) % 7
+        is_hol = (date(leto, mesec, d) in at_holidays) or (mesec == 12 and d in [24, 31])
+        hrs = SHIFTS_HUNDREDTHS.get(base_sh, 0) / 100.0 if base_sh in SHIFTS_HUNDREDTHS else 0.0
+        bg = "#fff0f0" if is_hol else ("#f2f2f7" if dow >= 5 else "#ffffff")
+        bemerkung = "Feiertag" if is_hol else ("Wochenende" if dow >= 5 else "")
+        if "➔" in raw_v:
+            bemerkung += f" | Aushilfe ({raw_v})"
+        rows_html.append(
+            f"<tr style='background:{bg};'>"
+            f"<td>{d:02d}.{mesec:02d}.{leto}</td>"
+            f"<td>{dow_short[dow]}</td>"
+            f"<td style='font-weight:bold;'>{'' if raw_v == '...' else raw_v}</td>"
+            f"<td>{hrs:.2f} h</td>"
+            f"<td>{bemerkung}</td></tr>"
+        )
+
+    return f"""<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Stundennachweis {emp_name}</title>
+<style>
+    @page {{ size: A4 portrait; margin: 12mm; }}
+    body {{ font-family: Arial, sans-serif; font-size: 9.5pt; color: #111; }}
+    h1 {{ font-size: 14pt; color: #1e3a8a; margin-bottom: 4px; }}
+    .box {{ border: 1px solid #888; padding: 8px; margin-bottom: 10px; background: #f8f9fa; }}
+    table {{ width: 100%; border-collapse: collapse; margin-top: 6px; }}
+    th, td {{ border: 1px solid #999; padding: 3px 6px; text-align: left; font-size: 8.5pt; }}
+    th {{ background: #e9ecef; }}
+    .sig {{ display: flex; justify-content: space-between; margin-top: 28px; }}
+    .sig div {{ width: 42%; border-top: 1px solid #222; padding-top: 4px; text-align: center; }}
+    @media print {{ .no-print {{ display: none; }} }}
+</style></head><body>
+<div class="no-print" style="margin-bottom:10px;">
+    <button onclick="window.print()" style="padding:6px 12px;font-weight:bold;cursor:pointer;">🖨️ Stundennachweis drucken / PDF</button>
+</div>
+<h1>📄 Persönlicher Monats-Stundennachweis – {monat_str} {leto}</h1>
+<div class="box">
+    <strong>Mitarbeiter:</strong> {emp_name} &nbsp;|&nbsp; <strong>Station:</strong> {abt} &nbsp;|&nbsp; <strong>Rolle:</strong> {rolle}<br>
+    <strong>SOLL-Stunden:</strong> {emp_row['SOLL']:.1f} h &nbsp;|&nbsp; <strong>IST-Stunden:</strong> {emp_row['IST']:.1f} h &nbsp;|&nbsp;
+    <strong>Überstunden:</strong> {emp_row['ÜBERSTD.']:.1f} h &nbsp;|&nbsp; <strong>Neuer Gesamtsaldo:</strong> {emp_row['SALDO']:.1f} h<br>
+    <strong>Nachtdienste:</strong> {emp_zuschlag_row['🌙 Nachtdienste (Anz.)']} ({emp_zuschlag_row['🌙 Nacht-Stunden (h)']} h) &nbsp;|&nbsp;
+    <strong>SO-Stunden:</strong> {emp_zuschlag_row['☀️ SO-Stunden (Zuschlag)']} h &nbsp;|&nbsp;
+    <strong>FT-Stunden:</strong> {emp_zuschlag_row['⭐ FT-Stunden (Feiertag)']} h &nbsp;|&nbsp;
+    <strong>Resturlaub neu:</strong> {emp_zuschlag_row['🏝️ URL Rest Neu']} Tage
+</div>
+<table>
+    <thead><tr><th>Datum</th><th>Wochentag</th><th>Dienst / Abwesenheit</th><th>Gewertete Arbeitszeit</th><th>Bemerkung / Station</th></tr></thead>
+    <tbody>{''.join(rows_html)}</tbody>
+</table>
+<div class="sig">
+    <div>Datum, Unterschrift Mitarbeiter/in ({emp_name})</div>
+    <div>Unterschrift WBL / Stationsleitung</div>
+</div>
+</body></html>"""
+
 def run_austrian_law_audit(df_plan, staff_df, shifts_df, num_days, leto, mesec, first_day_weekday, at_holidays, min_b=4, min_h=4):
-    """Prüft den Dienstplan nach Steiermark- & Österreich-Recht (inkl. Springer-Anrechnung)."""
+    """Prüft den Dienstplan nach Steiermark- & Österreich-Recht."""
     issues = []
     day_cols_only = [f"{d}." for d in range(1, num_days + 1) if f"{d}." in df_plan.columns]
     real_df = df_plan[~df_plan["Mitarbeiter"].astype(str).str.contains("X-Oseba|FEHLT|⚠️|🤝 Aushilfe", na=False)]
@@ -631,6 +1003,16 @@ def run_austrian_law_audit(df_plan, staff_df, shifts_df, num_days, leto, mesec, 
         abt = str(row["Abteilung"])
         rolle = str(row["Rolle"])
         vals = [extract_base_shift(row[c]) for c in day_cols_only]
+
+        if abt == "Abteilung F":
+            for d, v in enumerate(vals):
+                if v in SHIFTS_HUNDREDTHS and v not in NIGHT_SHIFTS + ["OFF"]:
+                    issues.append({
+                        "Kategorie": "🛑 Abt. F Tagdienst-Sperre",
+                        "Betroffen": f"{emp} ({abt})",
+                        "Zeitraum": f"Tag {d+1}.",
+                        "Details": f"Mitarbeiter auf Abt. F hat Tagdienst '{v}' (Abt. F ist nur für Nachtdienste vorgesehen)."
+                    })
 
         if rolle == "Pflegeassistenz":
             for d, v in enumerate(vals):
@@ -743,9 +1125,20 @@ def run_austrian_law_audit(df_plan, staff_df, shifts_df, num_days, leto, mesec, 
 
     for d, c in enumerate(day_cols_only):
         dgkp_rows = real_df[real_df["Rolle"].isin(["DGKP", "Leitung"])]
+        hh_rows = real_df[real_df["Rolle"] == "Heimhelfer"]
         all_n1 = sum(1 for v in real_df[c].astype(str) if extract_base_shift(v) == "N1")
         all_n2 = sum(1 for v in real_df[c].astype(str) if extract_base_shift(v) == "N2")
         dgkp_in_night = sum(1 for v in dgkp_rows[c].astype(str) if extract_base_shift(v) in NIGHT_SHIFTS)
+        jed_count = sum(1 for v in hh_rows[c].astype(str) if extract_base_shift(v) == "JED")
+        hh_in_care = sum(1 for v in hh_rows[c].astype(str) if extract_base_shift(v) in DAY_CARE_SHIFTS)
+
+        if jed_count == 0 and hh_in_care > 0:
+            issues.append({
+                "Kategorie": "🛑 Heimhelfer-Priorität (JED fehlt!)",
+                "Betroffen": "Speisesaal (Abt. B)",
+                "Zeitraum": f"Tag {d+1}.",
+                "Details": "Ein Heimhelfer arbeitet in der Pflege, obwohl der Speisesaal (JED) noch nicht besetzt ist!"
+            })
 
         if dgkp_in_night > 1:
             issues.append({
@@ -776,16 +1169,19 @@ if "target_min_b" not in st.session_state:
     st.session_state.target_min_b = 4
 if "target_min_h" not in st.session_state:
     st.session_state.target_min_h = 4
+if "max_vac_per_station" not in st.session_state:
+    st.session_state.max_vac_per_station = 2
 
-tab1, tab_shifts, tab_pavo, tab3, tab2, tab4, tab5, tab6 = st.tabs([
+tab1, tab_shifts, tab_pavo, tab3, tab2, tab_print, tab4, tab5, tab6 = st.tabs([
     "⚙️ 1. Team & Verträge", 
     "⏱️ 2. Dienste-Studio",
-    "🧮 3. StPAVO Personalrechner",
-    "🗓️ 4. Kompakt-Kalender (Urlaub/Wünsche)", 
+    "🧮 3. StPAVO Rechner",
+    "🗓️ 4. Kompakt-Kalender & Kontingent", 
     "📅 5. Dienstplan", 
-    "🚨 6. SOS & Tauschbörse", 
-    "📉 7. Analyse & Fairness", 
-    "🛡️ 8. Inspektorat Steiermark"
+    "🖨️ 6. Geocon & Druck-Studio",
+    "🚨 7. SOS & Tauschbörse", 
+    "📉 8. Analyse & Wunsch-Quote", 
+    "🛡️ 9. Inspektorat Steiermark"
 ])
 
 with tab1:
@@ -797,10 +1193,7 @@ with tab1:
         mesec = st.selectbox(
             "Monat:", 
             list(range(1, 13)), 
-            format_func=lambda x: [
-                "Januar", "Februar", "März", "April", "Mai", "Juni", 
-                "Juli", "August", "September", "Oktober", "November", "Dezember"
-            ][x - 1]
+            format_func=lambda x: MONTH_NAMES_DE[x - 1]
         )
 
     first_day_of_month_weekday, num_days = calendar.monthrange(leto, mesec)
@@ -828,7 +1221,7 @@ with tab1:
     st.divider()
     st.header("2. Team, Rollen (inkl. PFA), Gesetzlicher Status & Erlaubte Dienste")
     
-    if "staff_df_v70" not in st.session_state:
+    if "staff_df_v73" not in st.session_state:
         loaded_df = None
         if os.path.exists("team_data.csv"):
             try:
@@ -842,7 +1235,7 @@ with tab1:
             initial_staff.append({"ID": len(initial_staff), "Name": "WBL Uroš", "Abteilung": "Abteilung H", "Rolle": "Leitung", "Qualifikation": "Keine", "Gesetz_Status": "Normal", "Wochenstd": 37.0, "Prozent": 100.0, "URL_Gesamt": 30.0, "URL_Rest": 30.0, "Saldo_Alt": 0.0, "Max_Nacht": 0, "Nur_Nacht": False, "MO": True, "DI": True, "MI": True, "DO": True, "FR": True, "SA": False, "SO": False, "FT": False, "Spezialdienst": "Ohne"})
             for i in range(1, 6): initial_staff.append({"ID": len(initial_staff), "Name": f"DGKP B-{i}", "Abteilung": "Abteilung B", "Rolle": "DGKP", "Qualifikation": "Wundmanager" if i==1 else "Keine", "Gesetz_Status": "Normal", "Wochenstd": 37.0, "Prozent": 100.0, "URL_Gesamt": 25.0, "URL_Rest": 25.0, "Saldo_Alt": 0.0, "Max_Nacht": 0, "Nur_Nacht": False, "MO": True, "DI": True, "MI": True, "DO": True, "FR": True, "SA": True, "SO": True, "FT": True, "Spezialdienst": "Ohne"})
             for i in range(1, 5): initial_staff.append({"ID": len(initial_staff), "Name": f"DGKP H-{i}", "Abteilung": "Abteilung H", "Rolle": "DGKP", "Qualifikation": "Praxisanleiter" if i==1 else "Keine", "Gesetz_Status": "Normal", "Wochenstd": 37.0, "Prozent": 100.0, "URL_Gesamt": 25.0, "URL_Rest": 25.0, "Saldo_Alt": 0.0, "Max_Nacht": 0, "Nur_Nacht": False, "MO": True, "DI": True, "MI": True, "DO": True, "FR": True, "SA": True, "SO": True, "FT": True, "Spezialdienst": "Ohne"})
-            for i in range(1, 5): initial_staff.append({"ID": len(initial_staff), "Name": f"DGKP F-{i}", "Abteilung": "Abteilung F", "Rolle": "DGKP", "Qualifikation": "Keine", "Gesetz_Status": "Nachtschwerarbeit (NSchG)" if i < 3 else "Normal", "Wochenstd": 37.0, "Prozent": 100.0, "URL_Gesamt": 25.0, "URL_Rest": 25.0, "Saldo_Alt": 0.0, "Max_Nacht": 12, "Nur_Nacht": True if i < 3 else False, "MO": True, "DI": True, "MI": True, "DO": True, "FR": True, "SA": True, "SO": True, "FT": True, "Spezialdienst": "Ohne"})
+            for i in range(1, 5): initial_staff.append({"ID": len(initial_staff), "Name": f"DGKP F-{i}", "Abteilung": "Abteilung F", "Rolle": "DGKP", "Qualifikation": "Keine", "Gesetz_Status": "Nachtschwerarbeit (NSchG)", "Wochenstd": 37.0, "Prozent": 100.0, "URL_Gesamt": 25.0, "URL_Rest": 25.0, "Saldo_Alt": 0.0, "Max_Nacht": 12, "Nur_Nacht": True, "MO": True, "DI": True, "MI": True, "DO": True, "FR": True, "SA": True, "SO": True, "FT": True, "Spezialdienst": "Ohne"})
             for i in range(1, 3): initial_staff.append({"ID": len(initial_staff), "Name": f"PFA B-{i}", "Abteilung": "Abteilung B", "Rolle": "PFA", "Qualifikation": "Keine", "Gesetz_Status": "Normal", "Wochenstd": 37.0, "Prozent": 100.0, "URL_Gesamt": 25.0, "URL_Rest": 25.0, "Saldo_Alt": 0.0, "Max_Nacht": 8, "Nur_Nacht": False, "MO": True, "DI": True, "MI": True, "DO": True, "FR": True, "SA": True, "SO": True, "FT": True, "Spezialdienst": "Ohne"})
             for i in range(1, 3): initial_staff.append({"ID": len(initial_staff), "Name": f"PFA H-{i}", "Abteilung": "Abteilung H", "Rolle": "PFA", "Qualifikation": "Keine", "Gesetz_Status": "Normal", "Wochenstd": 37.0, "Prozent": 100.0, "URL_Gesamt": 25.0, "URL_Rest": 25.0, "Saldo_Alt": 0.0, "Max_Nacht": 8, "Nur_Nacht": False, "MO": True, "DI": True, "MI": True, "DO": True, "FR": True, "SA": True, "SO": True, "FT": True, "Spezialdienst": "Ohne"})
             for i in range(1, 7): initial_staff.append({"ID": len(initial_staff), "Name": f"PA B-{i}", "Abteilung": "Abteilung B", "Rolle": "Pflegeassistenz", "Qualifikation": "Keine", "Gesetz_Status": "Normal", "Wochenstd": 37.0, "Prozent": 100.0, "URL_Gesamt": 25.0, "URL_Rest": 25.0, "Saldo_Alt": 0.0, "Max_Nacht": 8, "Nur_Nacht": False, "MO": True, "DI": True, "MI": True, "DO": True, "FR": True, "SA": True, "SO": True, "FT": True, "Spezialdienst": "Ohne"})
@@ -850,15 +1243,15 @@ with tab1:
             for i in range(1, 4): initial_staff.append({"ID": len(initial_staff), "Name": f"HH B-{i}", "Abteilung": "Abteilung B", "Rolle": "Heimhelfer", "Qualifikation": "Keine", "Gesetz_Status": "Normal", "Wochenstd": 37.0, "Prozent": 100.0, "URL_Gesamt": 25.0, "URL_Rest": 25.0, "Saldo_Alt": 0.0, "Max_Nacht": 0, "Nur_Nacht": False, "MO": True, "DI": True, "MI": True, "DO": True, "FR": True, "SA": True, "SO": True, "FT": True, "Spezialdienst": "JED"})
             for i in range(1, 3): initial_staff.append({"ID": len(initial_staff), "Name": f"HH H-{i}", "Abteilung": "Abteilung H", "Rolle": "Heimhelfer", "Qualifikation": "Keine", "Gesetz_Status": "Normal", "Wochenstd": 37.0, "Prozent": 100.0, "URL_Gesamt": 25.0, "URL_Rest": 25.0, "Saldo_Alt": 0.0, "Max_Nacht": 0, "Nur_Nacht": False, "MO": True, "DI": True, "MI": True, "DO": True, "FR": True, "SA": True, "SO": True, "FT": True, "Spezialdienst": "JED"})
             
-            st.session_state.staff_df_v70 = pd.DataFrame(initial_staff)
+            st.session_state.staff_df_v73 = pd.DataFrame(initial_staff)
         else:
-            st.session_state.staff_df_v70 = loaded_df
+            st.session_state.staff_df_v73 = loaded_df
 
     col_import, col_export = st.columns(2)
     with col_export:
         st.download_button(
             label="📥 Aktuelles Team als Backup speichern", 
-            data=st.session_state.staff_df_v70.to_csv(index=False).encode('utf-8'), 
+            data=st.session_state.staff_df_v73.to_csv(index=False).encode('utf-8'), 
             file_name="Mein_Team_Backup.csv", 
             mime="text/csv", 
             type="primary"
@@ -876,7 +1269,7 @@ with tab1:
                 try:
                     uploaded_team = sanitize_team_df(read_csv_smart(raw_bytes, is_index_col=False))
                     uploaded_team.to_csv("team_data.csv", index=False)
-                    st.session_state.staff_df_v70 = uploaded_team
+                    st.session_state.staff_df_v73 = uploaded_team
                     st.session_state.last_team_hash = file_hash
                     st.session_state.team_editor_ver += 1
                     st.session_state.cal_editor_ver += 1
@@ -891,7 +1284,7 @@ with tab1:
         for f_path in ["team_data.csv", "shifts_data.csv", "pavo_data.csv", cal_autosave_path, plan_autosave_path]:
             if os.path.exists(f_path): 
                 os.remove(f_path)
-        for k in ["staff_df_v70", "shifts_df_v70", "pavo_df_v70", "abs_matrix_v70", "raw_uploaded_cal", "last_generated_df"]:
+        for k in ["staff_df_v73", "shifts_df_v73", "pavo_df_v73", "abs_matrix_v73", "raw_uploaded_cal", "last_generated_df"]:
             if k in st.session_state: 
                 del st.session_state[k]
         st.session_state.team_editor_ver += 1
@@ -901,7 +1294,7 @@ with tab1:
         st.rerun()
 
     st.subheader("🎛️ Individueller Dienst-, Stunden- & Schutzstatus-Konfigurator")
-    current_staff_tab1 = st.session_state.staff_df_v70["Name"].dropna().astype(str).str.strip().tolist()
+    current_staff_tab1 = st.session_state.staff_df_v73["Name"].dropna().astype(str).str.strip().tolist()
     with st.form("custom_shift_builder_form"):
         cb1, cb2, cb3, cb4, cb5 = st.columns([1.8, 2.2, 1.3, 1.3, 0.9])
         with cb1:
@@ -928,7 +1321,7 @@ with tab1:
             apply_custom_btn = st.form_submit_button("✅ Speichern", type="primary", use_container_width=True)
 
         if apply_custom_btn and sel_staff_custom:
-            df_mod = st.session_state.staff_df_v70.copy()
+            df_mod = st.session_state.staff_df_v73.copy()
             for emp_n in sel_staff_custom:
                 mask = df_mod["Name"] == emp_n
                 if sel_shifts_custom:
@@ -950,7 +1343,7 @@ with tab1:
                     w_val = float(sel_hours_mode.split(" ")[0])
                     df_mod.loc[mask, "Wochenstd"] = w_val
             df_mod = sanitize_team_df(df_mod)
-            st.session_state.staff_df_v70 = df_mod
+            st.session_state.staff_df_v73 = df_mod
             df_mod.to_csv("team_data.csv", index=False)
             st.session_state.team_editor_ver += 1
             st.success("✅ Einstellungen erfolgreich auf Mitarbeiter übertragen!")
@@ -958,9 +1351,9 @@ with tab1:
 
     with st.form("team_editor_form"):
         edited_data = st.data_editor(
-            st.session_state.staff_df_v70, 
+            st.session_state.staff_df_v73, 
             num_rows="dynamic", 
-            key=f"tabelle_mitarbeiter_v70_{st.session_state.team_editor_ver}",
+            key=f"tabelle_mitarbeiter_v73_{st.session_state.team_editor_ver}",
             column_config={
                 "ID": None,
                 "Abteilung": st.column_config.SelectboxColumn("Abteilung", options=["Abteilung B", "Abteilung H", "Abteilung F"]),
@@ -970,7 +1363,7 @@ with tab1:
                 "Wochenstd": st.column_config.NumberColumn("Wochenstd.", min_value=1.0, max_value=60.0, default=37.0, step=0.5),
                 "Prozent": st.column_config.NumberColumn("Anst. (%)", disabled=True), 
                 "Max_Nacht": st.column_config.NumberColumn("Max Nacht", min_value=0, max_value=20, default=0),
-                "Nur_Nacht": st.column_config.CheckboxColumn("Nur Nacht? (Auf F ohne Häkchen = Nacht + Tag)"),
+                "Nur_Nacht": st.column_config.CheckboxColumn("Nur Nacht? (Abt. F ist automatisch 100% Nacht)"),
                 "Spezialdienst": st.column_config.TextColumn(
                     "Erlaubte Dienste (z.B. Ohne, F2, F7, X6, X7)", 
                     width="medium"
@@ -984,7 +1377,7 @@ with tab1:
         if st.form_submit_button("💾 Spremembe ekipe potrdi", type="primary"):
             clean_edited = sanitize_team_df(edited_data)
             clean_edited["URL_Rest"] = clean_edited.apply(lambda row: min(row["URL_Gesamt"], row["URL_Rest"]), axis=1)
-            st.session_state.staff_df_v70 = clean_edited
+            st.session_state.staff_df_v73 = clean_edited
             clean_edited.to_csv("team_data.csv", index=False)
             st.session_state.team_editor_ver += 1
             st.session_state.cal_editor_ver += 1
@@ -1029,7 +1422,7 @@ with tab_shifts:
                 if not new_sh_code or new_sh_code in ["OFF", "..."]:
                     st.error("Bitte ein gültiges Dienst-Kürzel eingeben!")
                 else:
-                    df_sh = st.session_state.shifts_df_v70.copy()
+                    df_sh = st.session_state.shifts_df_v73.copy()
                     new_entry = pd.DataFrame([{
                         "Kürzel": new_sh_code,
                         "Bezeichnung": new_sh_name if new_sh_name else f"Dienst {new_sh_code}",
@@ -1042,7 +1435,7 @@ with tab_shifts:
                     }])
                     df_sh = pd.concat([df_sh, new_entry], ignore_index=True)
                     df_sh = sanitize_shifts_df(df_sh)
-                    st.session_state.shifts_df_v70 = df_sh
+                    st.session_state.shifts_df_v73 = df_sh
                     df_sh.to_csv("shifts_data.csv", index=False)
                     st.session_state.shifts_editor_ver += 1
                     st.success(f"✅ Dienst **{new_sh_code}** ({new_sh_hours}h) wurde erfolgreich gespeichert!")
@@ -1052,7 +1445,7 @@ with tab_shifts:
     st.subheader("📋 Alle aktiven Dienste im System (Direkt editierbar & löschbar)")
     with st.form("edit_all_shifts_form"):
         edited_shifts_df = st.data_editor(
-            st.session_state.shifts_df_v70,
+            st.session_state.shifts_df_v73,
             num_rows="dynamic",
             use_container_width=True,
             hide_index=True,
@@ -1076,7 +1469,7 @@ with tab_shifts:
 
         if save_table_shifts:
             clean_sh = sanitize_shifts_df(edited_shifts_df)
-            st.session_state.shifts_df_v70 = clean_sh
+            st.session_state.shifts_df_v73 = clean_sh
             clean_sh.to_csv("shifts_data.csv", index=False)
             st.session_state.shifts_editor_ver += 1
             st.success("✅ Dienste-Katalog aktualisiert!")
@@ -1084,22 +1477,16 @@ with tab_shifts:
 
         if reset_shifts_btn:
             default_sh = get_default_shifts_df()
-            st.session_state.shifts_df_v70 = default_sh
+            st.session_state.shifts_df_v73 = default_sh
             default_sh.to_csv("shifts_data.csv", index=False)
             st.session_state.shifts_editor_ver += 1
             st.rerun()
 
 with tab_pavo:
     st.header("🧮 3. StPAVO Steiermark – Personalberechnung nach Pflegestufen & Qualifikations-Mix")
-    st.markdown(
-        "Trage hier die aktuelle Anzahl der **Bewohnerinnen und Bewohner je Pflegegeldstufe (Stufe 0 bis 7)** für **Abteilung B** und **Abteilung H** ein. "
-        "Das System berechnet sofort den gesetzlichen **SOLL-Personalbedarf in VZÄ (37h)**, den **täglichen Personalbedarf auf der Station** "
-        "sowie die **prozentuale Aufteilung (DGKP, PFA, PA, Heimhilfe)** im Vergleich zu deinem aktuellen Team!"
-    )
-
     st.subheader("1. Bewohneranzahl nach Pflegegeldstufen (Stufe 0 bis 7) eingeben")
     edited_pavo = st.data_editor(
-        st.session_state.pavo_df_v70,
+        st.session_state.pavo_df_v73,
         use_container_width=True,
         hide_index=True,
         column_config={
@@ -1115,8 +1502,8 @@ with tab_pavo:
         },
         key="pavo_editor_table"
     )
-    if not edited_pavo.equals(st.session_state.pavo_df_v70):
-        st.session_state.pavo_df_v70 = edited_pavo
+    if not edited_pavo.equals(st.session_state.pavo_df_v73):
+        st.session_state.pavo_df_v73 = edited_pavo
         edited_pavo.to_csv("pavo_data.csv", index=False)
 
     with st.expander("⚙️ StPAVO Steiermark Schlüssel & Qualifikations-Prozente feinjustieren (Optional)", expanded=False):
@@ -1135,7 +1522,7 @@ with tab_pavo:
     total_residents = 0
     total_soll_vza = 0.0
 
-    for _, p_row in st.session_state.pavo_df_v70.iterrows():
+    for _, p_row in st.session_state.pavo_df_v73.iterrows():
         abt_n = str(p_row["Abteilung"])
         bew_sum = sum(int(p_row.get(sc, 0)) for sc in stufen_cols)
         vza_sum = sum(float(p_row.get(sc, 0)) / DEFAULT_PAVO_KEYS[sc] for sc in stufen_cols)
@@ -1157,7 +1544,7 @@ with tab_pavo:
 
     df_stat_res = pd.DataFrame(station_results)
 
-    df_team_curr = sanitize_team_df(st.session_state.staff_df_v70)
+    df_team_curr = sanitize_team_df(st.session_state.staff_df_v73)
     ist_vza_total = (df_team_curr["Wochenstd"].sum() / 37.0)
     diff_vza = ist_vza_total - total_soll_vza
 
@@ -1176,8 +1563,8 @@ with tab_pavo:
         empf_h = df_stat_res.loc[df_stat_res["Wohnbereich"] == "Abteilung H", "Empf_Int"].values[0] if len(df_stat_res) > 1 else 4
         st.info(
             f"💡 **Stations-Fokus im KI-Planer:** "
-            f"**Abteilung B:** Min. `{st.session_state.target_min_b}` (Ideal 5) PA/PFA + 1 HH (`JED`) + 1 DGKP | "
-            f"**Abteilung H:** Min. `{st.session_state.target_min_h}` PA/PFA/HH + 1 DGKP."
+            f"**Abteilung B:** Min. `{st.session_state.target_min_b}` (Ideal 5) PA/PFA + 1 HH (`JED` Pflicht!) + 1 DGKP | "
+            f"**Abteilung H:** Min. `{st.session_state.target_min_h}` PA/PFA/HH + 1 DGKP | **Abt. F:** Exklusiv Nachtdienst."
         )
     with col_apply_pavo2:
         if st.button("🔗 StPAVO-Tagesbedarf übernehmen", type="primary", use_container_width=True):
@@ -1244,8 +1631,15 @@ with tab_pavo:
     st.dataframe(qual_mix_df, use_container_width=True, hide_index=True)
 
 with tab3:
-    st.header("🗓️ 4. Kompakt-Kalender für Urlaub, Wünsche & Fix-Dienste (Monatsübersicht)")
-    current_staff = st.session_state.staff_df_v70["Name"].dropna().astype(str).str.strip().tolist()
+    st.header("🗓️ 4. Kompakt-Kalender, Live-Urlaubs-Kontingent-Ampel & Auto-ZA-Assistent")
+    st.markdown(
+        "**Die 4-Stufen-Hierarchie für deine Planung:** \n"
+        "- **Stufe 1 (`URL`, `KRA`, `SU`, `FO`, `PFL`):** 100% gesetzlich fixiert + bezahlte Stunden-Gutschrift.\n"
+        "- **Stufe 2 (`ENT` - Entlastungstag):** Fixiert + bezahlt + **KI-Block-Bonus** (die KI legt automatisch noch einen freien Tag daneben für echte Erholung!).\n"
+        "- **Stufe 3 (`ZA` - Zeitausgleich):** Fixiert frei + **reduziert aktiv das Überstunden-Saldo** (keine Stunden-Gutschrift).\n"
+        "- **Stufe 4 (`WUN` - Wunsch-Frei):** Wird zu 95–100% erfüllt! Nur wenn zu viele Mitarbeiter am selben Tag `WUN` eintragen und die Station unterbesetzt wäre, greift der **faire KI-Richter** ein."
+    )
+    current_staff = st.session_state.staff_df_v73["Name"].dropna().astype(str).str.strip().tolist()
     
     day_cols = []
     weekend_or_hol_days = []
@@ -1295,23 +1689,23 @@ with tab3:
                     new_mat.at[emp, target_day_cols[i]] = val_cell
         return new_mat
 
-    if "abs_matrix_v70" not in st.session_state:
+    if "abs_matrix_v73" not in st.session_state:
         if os.path.exists(cal_autosave_path):
             try:
                 with open(cal_autosave_path, "rb") as f:
                     saved_cal = read_csv_smart(f.read(), is_index_col=True)
                 st.session_state.raw_uploaded_cal = saved_cal
-                st.session_state.abs_matrix_v70 = sync_calendar_df(saved_cal, current_staff, day_cols)
+                st.session_state.abs_matrix_v73 = sync_calendar_df(saved_cal, current_staff, day_cols)
             except Exception:
-                st.session_state.abs_matrix_v70 = pd.DataFrame("", index=current_staff, columns=day_cols)
+                st.session_state.abs_matrix_v73 = pd.DataFrame("", index=current_staff, columns=day_cols)
         else:
-            st.session_state.abs_matrix_v70 = pd.DataFrame("", index=current_staff, columns=day_cols)
+            st.session_state.abs_matrix_v73 = pd.DataFrame("", index=current_staff, columns=day_cols)
     else:
         if st.session_state.get("needs_cal_resync") and "raw_uploaded_cal" in st.session_state:
-            st.session_state.abs_matrix_v70 = sync_calendar_df(st.session_state.raw_uploaded_cal, current_staff, day_cols)
+            st.session_state.abs_matrix_v73 = sync_calendar_df(st.session_state.raw_uploaded_cal, current_staff, day_cols)
             st.session_state.needs_cal_resync = False
         else:
-            st.session_state.abs_matrix_v70 = sync_calendar_df(st.session_state.abs_matrix_v70, current_staff, day_cols)
+            st.session_state.abs_matrix_v73 = sync_calendar_df(st.session_state.abs_matrix_v73, current_staff, day_cols)
 
     dynamic_fix_options = [
         f"📌 {row['Kürzel']} (Fix {row['Stunden']}h – {row['Bezeichnung']})"
@@ -1319,17 +1713,24 @@ with tab3:
     ]
     entry_options = [
         "", 
-        "URL (Urlaub)", "SU (Sonderurlaub)", "ENT (Entlastung)", "KRA (Krank)", 
-        "ZA (Zeitausgleich)", "FO (Fortbildung GuKG)", "WUN (Wunsch-Frei)", "MUS (Muss arbeiten)"
+        "URL (Urlaub - Fix & bezahlt)", 
+        "ENT (Entlastungstag - Fix & Block-Erholung)", 
+        "ZA (Zeitausgleich - Fix & baut Überstunden ab)",
+        "WUN (Wunsch-Frei - Fairer KI-Richter)", 
+        "SU (Sonderurlaub)", 
+        "KRA (Krankenstand)", 
+        "FO (Fortbildung GuKG)", 
+        "MUS (Muss arbeiten)"
     ] + dynamic_fix_options + ["🗑️ LÖSCHEN (Zelle leeren)"]
 
-    col_bak1, col_bak2 = st.columns(2)
+    col_bak1, col_bak2, col_bak3 = st.columns([1.2, 1.2, 1.2])
     with col_bak1:
         st.download_button(
             label="📥 Kalender / Fix-Dienste als Backup speichern", 
-            data=st.session_state.abs_matrix_v70.to_csv(index=True).encode('utf-8'), 
+            data=st.session_state.abs_matrix_v73.to_csv(index=True).encode('utf-8'), 
             file_name=f"Urlaubsmatrix_{mesec}_{leto}.csv", 
-            mime="text/csv"
+            mime="text/csv",
+            use_container_width=True
         )
     with col_bak2:
         cal_upload = st.file_uploader("📂 Kalender Backup hochladen", type=["csv"], key="cal_upload")
@@ -1344,7 +1745,7 @@ with tab3:
                     uploaded_cal = read_csv_smart(raw_cal_bytes, is_index_col=True)
                     st.session_state.raw_uploaded_cal = uploaded_cal
                     synced_cal = sync_calendar_df(uploaded_cal, current_staff, day_cols)
-                    st.session_state.abs_matrix_v70 = synced_cal
+                    st.session_state.abs_matrix_v73 = synced_cal
                     synced_cal.to_csv(cal_autosave_path, index=True)
                     st.session_state.last_cal_hash = cal_hash
                     st.session_state.cal_editor_ver += 1
@@ -1352,8 +1753,85 @@ with tab3:
                     st.rerun()
                 except Exception as e:
                     st.error(f"Fehler beim Laden des Kalenders: {e}")
+    with col_bak3:
+        st.session_state.max_vac_per_station = st.number_input(
+            "🚦 Max. Urlaube/Abwesende pro Station (B / H):",
+            min_value=1, max_value=5, value=int(st.session_state.max_vac_per_station), step=1,
+            help="Empfohlen für deine Stationsgröße: 2 Mitarbeiter gleichzeitig pro Station."
+        )
 
-    st.subheader("⚡ Schnelleingabe (Urlaube, Wünsche & Fix-Dienste eintragen)")
+    # --- NEU: INTELLIGENTER URLAUBS-PRÜFER & AUTO-ZA-GENERATOR ---
+    with st.expander("🤖 KI-Urlaubs-Kontingent-Prüfer & Automatischer ZA-/Entlastungs-Planer (Empfohlen!)", expanded=False):
+        q_c1, q_c2 = st.columns(2)
+        with q_c1:
+            st.markdown("**🔍 1. Urlaubs-Antrag vorab auf Kontingent prüfen:**")
+            chk_emp = st.selectbox("Mitarbeiter für Antrag:", current_staff, key="chk_vac_emp")
+            chk_d1, chk_d2 = st.slider("Gewünschter Zeitraum:", 1, num_days, (1, 7), key="chk_vac_days")
+            if st.button("🚦 Prüfen, ob Urlaub im Kontingent frei ist"):
+                emp_row_info = st.session_state.staff_df_v73[st.session_state.staff_df_v73["Name"] == chk_emp].iloc[0]
+                e_abt = str(emp_row_info["Abteilung"])
+                e_rol = str(emp_row_info["Rolle"])
+                q_df_now = build_vacation_quota_summary_df(
+                    st.session_state.abs_matrix_v73, st.session_state.staff_df_v73, day_cols, st.session_state.max_vac_per_station
+                )
+                conflict_days = []
+                for d_i in range(chk_d1, chk_d2 + 1):
+                    c_n = day_cols[d_i - 1]
+                    if e_abt == "Abteilung B" and int(q_df_now.iloc[0][c_n]) >= st.session_state.max_vac_per_station:
+                        conflict_days.append(f"{d_i}. (Abt. B voll)")
+                    elif e_abt == "Abteilung H" and int(q_df_now.iloc[1][c_n]) >= st.session_state.max_vac_per_station:
+                        conflict_days.append(f"{d_i}. (Abt. H voll)")
+                    elif e_abt == "Abteilung F" and int(q_df_now.iloc[4][c_n]) >= 1:
+                        conflict_days.append(f"{d_i}. (Abt. F Nachtpool voll)")
+                    if e_rol == "Heimhelfer" and int(q_df_now.iloc[3][c_n]) >= 1:
+                        conflict_days.append(f"{d_i}. (Bereits 1 HH auf Urlaub – JED-Gefahr!)")
+                    if e_rol in ["DGKP", "Leitung"] and e_abt in ["Abteilung B", "Abteilung H"] and int(q_df_now.iloc[2][c_n]) >= 2:
+                        conflict_days.append(f"{d_i}. (Bereits 2 DGKP abwesend)")
+                if not conflict_days:
+                    st.success(f"✅ **GRÜNES LICHT!** `{chk_emp}` ({e_abt}, {e_rol}) kann von **{chk_d1}. bis {chk_d2}.** problemlos auf Urlaub/ZA gehen!")
+                else:
+                    st.warning(f"⚠️ **Kontingent-Warnung an folgenden Tagen:** {', '.join(conflict_days)}")
+
+        with q_c2:
+            st.markdown("**⚖️ 2. Automatischer ZA-Abbau für Mitarbeiter mit hohem Plus-Saldo (`Saldo_Alt > +12h`):**")
+            st.caption("Sucht Mitarbeiter mit hohem Alt-Saldo und trägt ihnen automatisch an grünen Kontingent-Tagen `ZA` (Zeitausgleich) ein.")
+            if st.button("⚡ Auto-ZA für Plus-Stunden an grünen Tagen eintragen", type="primary"):
+                q_df_now = build_vacation_quota_summary_df(
+                    st.session_state.abs_matrix_v73, st.session_state.staff_df_v73, day_cols, st.session_state.max_vac_per_station
+                )
+                za_added_count = 0
+                for _, s_r in st.session_state.staff_df_v73.iterrows():
+                    emp_n = str(s_r["Name"]).strip()
+                    s_alt = float(s_r.get("Saldo_Alt", 0.0))
+                    e_abt = str(s_r["Abteilung"]).strip()
+                    e_rol = str(s_r["Rolle"]).strip()
+                    if s_alt >= 12.0 and e_abt in ["Abteilung B", "Abteilung H"]:
+                        needed_za_days = min(3, int(s_alt // 11.5))
+                        given = 0
+                        for d_i in range(1, num_days + 1):
+                            if given >= needed_za_days:
+                                break
+                            c_n = day_cols[d_i - 1]
+                            if st.session_state.abs_matrix_v73.at[emp_n, c_n] != "":
+                                continue
+                            row_idx_abt = 0 if e_abt == "Abteilung B" else 1
+                            if int(q_df_now.iloc[row_idx_abt][c_n]) < st.session_state.max_vac_per_station - 1:
+                                if e_rol == "Heimhelfer" and int(q_df_now.iloc[3][c_n]) >= 1:
+                                    continue
+                                st.session_state.abs_matrix_v73.at[emp_n, c_n] = "ZA"
+                                q_df_now.at[row_idx_abt, c_n] = int(q_df_now.iloc[row_idx_abt][c_n]) + 1
+                                given += 1
+                                za_added_count += 1
+                if za_added_count > 0:
+                    st.session_state.raw_uploaded_cal = st.session_state.abs_matrix_v73.copy()
+                    st.session_state.abs_matrix_v73.to_csv(cal_autosave_path, index=True)
+                    st.session_state.cal_editor_ver += 1
+                    st.success(f"✅ Es wurden automatisch **{za_added_count} ZA-Tage** an grünen Kontingent-Tagen eingetragen!")
+                    st.rerun()
+                else:
+                    st.info("Aktuell hat kein Mitarbeiter auf B/H ein `Saldo_Alt` von mindestens +12,0 Stunden.")
+
+    st.subheader("⚡ Schnelleingabe (Urlaube, Entlastungstage, ZA, Wünsche & Fix-Dienste)")
     with st.form("bulk_add_form"):
         b_col1, b_col2, b_col3, b_col4 = st.columns([2, 2, 1.8, 1])
         with b_col1: 
@@ -1361,7 +1839,7 @@ with tab3:
         with b_col2: 
             d_start, d_end = st.slider("2. Von Tag bis Tag:", 1, num_days, (1, 5))
         with b_col3: 
-            selected_reason = st.selectbox("3. Urlaub, Wunsch oder Fix-Dienst:", entry_options[1:])
+            selected_reason = st.selectbox("3. Urlaub, ENT, ZA, Wunsch oder Fix-Dienst:", entry_options[1:])
         with b_col4: 
             st.write("")
             st.write("")
@@ -1378,16 +1856,16 @@ with tab3:
             for emp in selected_emps:
                 for d in range(d_start, d_end + 1):
                     target_col = day_cols[d-1]
-                    st.session_state.abs_matrix_v70.at[emp, target_col] = val_to_write
-            st.session_state.raw_uploaded_cal = st.session_state.abs_matrix_v70.copy()
-            st.session_state.abs_matrix_v70.to_csv(cal_autosave_path, index=True)
+                    st.session_state.abs_matrix_v73.at[emp, target_col] = val_to_write
+            st.session_state.raw_uploaded_cal = st.session_state.abs_matrix_v73.copy()
+            st.session_state.abs_matrix_v73.to_csv(cal_autosave_path, index=True)
             st.session_state.cal_editor_ver += 1
             st.success("✅ Erfolgreich eingetragen & gespeichert!")
             st.rerun()
 
     st.caption(
-        "🎨 **Kürzel-Legende:** `URL` = Urlaub | `KRA` = Krank | `ZA` = Zeitausgleich | `FO` = Fortbildung | `SU`/`ENT` = Sonderurlaub/Entlastung | "
-        "`WUN` = Wunsch-Frei | `MUS` = Muss arbeiten | `F2`, `F7`, `X7`, `N1`... = Fixierter Dienst"
+        "🎨 **Kürzel-Legende:** `URL` = Urlaub (Blau) | `ENT` = Entlastungstag (Lila + Block-Bonus) | `ZA` = Zeitausgleich (Dunkel, baut Saldo ab) | "
+        "`WUN` = Wunsch-Frei (Grün, fairer KI-Richter) | `KRA` = Krank | `FO` = Fortbildung | `MUS` = Muss arbeiten | `F2`, `X7`... = Fix-Dienst"
     )
 
     def style_compact_cal(val, col_name):
@@ -1427,7 +1905,7 @@ with tab3:
     )
 
     def render_compact_cal_block(staff_subset, block_key):
-        sub_cal = st.session_state.abs_matrix_v70.loc[staff_subset].copy()
+        sub_cal = st.session_state.abs_matrix_v73.loc[staff_subset].copy()
         row_h = min(480, max(140, int(len(staff_subset) * 36 + 45)))
         try:
             edited_sub_cal = st.data_editor(
@@ -1449,23 +1927,38 @@ with tab3:
         for c_col in cleaned_sub.columns:
             cleaned_sub[c_col] = cleaned_sub[c_col].map(normalize_cal_cell)
         if not cleaned_sub.equals(sub_cal):
-            st.session_state.abs_matrix_v70.loc[staff_subset, day_cols] = cleaned_sub[day_cols].values
-            st.session_state.raw_uploaded_cal = st.session_state.abs_matrix_v70.copy()
-            st.session_state.abs_matrix_v70.to_csv(cal_autosave_path, index=True)
+            st.session_state.abs_matrix_v73.loc[staff_subset, day_cols] = cleaned_sub[day_cols].values
+            st.session_state.raw_uploaded_cal = st.session_state.abs_matrix_v73.copy()
+            st.session_state.abs_matrix_v73.to_csv(cal_autosave_path, index=True)
             st.session_state.cal_editor_ver += 1
             st.rerun()
 
     if "Aufgeteilt" in view_mode_cal:
         for dept_label, dept_icon in [("Abteilung B", "🔵"), ("Abteilung H", "🟢"), ("Abteilung F", "🟣")]:
-            dept_emps = st.session_state.staff_df_v70[
-                st.session_state.staff_df_v70["Abteilung"] == dept_label
+            dept_emps = st.session_state.staff_df_v73[
+                st.session_state.staff_df_v73["Abteilung"] == dept_label
             ]["Name"].dropna().astype(str).str.strip().tolist()
-            dept_emps = [e for e in dept_emps if e in st.session_state.abs_matrix_v70.index]
+            dept_emps = [e for e in dept_emps if e in st.session_state.abs_matrix_v73.index]
             if dept_emps:
                 st.markdown(f"**{dept_icon} {dept_label} ({len(dept_emps)} Mitarbeiter)**")
                 render_compact_cal_block(dept_emps, dept_label.replace(" ", "_"))
     else:
         render_compact_cal_block(current_staff, "all_staff")
+
+    # --- LIVE-KONTINGENT-AMPEL DIREKT UNTER DEM KALENDER ---
+    st.subheader("🚦 Live-Urlaubs- & Kontingent-Ampel (Prüfung über den gesamten Monat)")
+    st.caption(
+        "**Grün** = Kontingent frei | **Gelb** = Limit genau erreicht (z. B. 2 Personen auf Station) | "
+        "**Rot** = Kontingent überschritten (Gefahr von Überstunden oder Springer-Bedarf!)"
+    )
+    quota_summary_df = build_vacation_quota_summary_df(
+        st.session_state.abs_matrix_v73, st.session_state.staff_df_v73, day_cols, int(st.session_state.max_vac_per_station)
+    )
+    st.dataframe(
+        style_vacation_quota_df(quota_summary_df, int(st.session_state.max_vac_per_station)),
+        use_container_width=True,
+        hide_index=True
+    )
 
 with tab2:
     st.header("📅 5. Automatische Dienstplangenerierung & Live-Editor")
@@ -1474,22 +1967,23 @@ with tab2:
         try:
             loaded_plan = pd.read_csv(plan_autosave_path)
             st.session_state.last_generated_df = recalculate_plan_df(
-                loaded_plan, st.session_state.staff_df_v70, num_days
+                loaded_plan, st.session_state.staff_df_v73, num_days
             )
         except Exception:
             pass
     
-    if st.button("🚀 Dienstplan neu berechnen (Stations-Fokus B: 4–5 PA/PFA + 1 HH + 1 DGKP | H: 4 PA/HH + 1 DGKP | F: Nacht + Flex)", type="primary", use_container_width=True):
+    if st.button("🚀 Dienstplan neu berechnen (4-Stufen Urlaubs-/ENT-/ZA-/Wunsch-Algorithmus + B/H/F Fokus)", type="primary", use_container_width=True):
         
         try:
-            with st.spinner("⏳ KI berechnet die beste Dienstplan-Variante (inkl. automatischer Springer-Markierung '➔ H' / '➔ B')..."):
+            with st.spinner("⏳ KI berechnet Dienstplan (1. URL/KRA Fix | 2. ENT mit Block-Erholung | 3. ZA Saldo-Abbau | 4. Faire WUN-Verteilung)..."):
                 
-                df_clean = sanitize_team_df(st.session_state.staff_df_v70)
+                df_clean = sanitize_team_df(st.session_state.staff_df_v73)
                 staff_list = df_clean.to_dict("records")
                 
-                st.session_state.absences_v70 = []
-                st.session_state.work_rules_v70 = []
-                st.session_state.fixed_shifts_v70 = []
+                st.session_state.absences_v73 = []     # Stufe 1, 2, 3 (URL, KRA, SU, FO, PFL, ENT, ZA)
+                st.session_state.wishes_v73 = []       # Stufe 4 (WUN - Wunsch-Frei mit Kollisions-Schutz)
+                st.session_state.work_rules_v73 = []   # MUS (Muss arbeiten)
+                st.session_state.fixed_shifts_v73 = [] # Manuelle Fix-Dienste
                 
                 for emp_name in current_staff:
                     emp_id_list = df_clean.loc[df_clean["Name"] == emp_name, "ID"].values
@@ -1497,10 +1991,11 @@ with tab2:
                         continue
                     emp_id = int(emp_id_list[0])
                     emp_role_val = str(df_clean.loc[df_clean["ID"] == emp_id, "Rolle"].values[0]).strip()
+                    emp_abt_val = str(df_clean.loc[df_clean["ID"] == emp_id, "Abteilung"].values[0]).strip()
                     
                     for d in range(1, num_days + 1):
                         col_name = day_cols[d-1]
-                        val = st.session_state.abs_matrix_v70.at[emp_name, col_name]
+                        val = st.session_state.abs_matrix_v73.at[emp_name, col_name]
                         
                         if pd.notna(val) and str(val).strip() != "":
                             val_str = str(val).upper().replace("📌", "").strip()
@@ -1517,9 +2012,11 @@ with tab2:
                                     break
                                     
                             if matched_manual_sh is not None:
+                                if emp_abt_val == "Abteilung F" and matched_manual_sh not in NIGHT_SHIFTS:
+                                    continue
                                 if emp_role_val in ["DGKP", "Leitung"] and matched_manual_sh == "N2":
                                     matched_manual_sh = "N1"
-                                st.session_state.fixed_shifts_v70.append({
+                                st.session_state.fixed_shifts_v73.append({
                                     "emp_id": emp_id, "emp_name": emp_name, "day": day_idx, "shift": matched_manual_sh
                                 })
                                 continue
@@ -1534,10 +2031,12 @@ with tab2:
                             elif "WUN" in val_str or "FREI" in val_str: reason = "WUNSCH-FREI"
                             elif "MUS" in val_str: reason = "MUSS-ARBEITEN"
                             
-                            if reason in ["URL", "SU", "ENT", "KRA", "ZA", "PFLEGE", "FO", "WUNSCH-FREI"]:
-                                st.session_state.absences_v70.append({"emp_id": emp_id, "emp_name": emp_name, "day": day_idx, "reason": reason})
+                            if reason in HARD_ABSENCES:
+                                st.session_state.absences_v73.append({"emp_id": emp_id, "emp_name": emp_name, "day": day_idx, "reason": reason})
+                            elif reason == "WUNSCH-FREI":
+                                st.session_state.wishes_v73.append({"emp_id": emp_id, "emp_name": emp_name, "day": day_idx})
                             elif reason == "MUSS-ARBEITEN":
-                                st.session_state.work_rules_v70.append({"emp_id": emp_id, "emp_name": emp_name, "day": day_idx, "rule": reason})
+                                st.session_state.work_rules_v73.append({"emp_id": emp_id, "emp_name": emp_name, "day": day_idx, "rule": reason})
 
                 prev_month_last_day_night = {s["ID"]: False for s in staff_list}
                 prev_month_second_last_day_night = {s["ID"]: False for s in staff_list}
@@ -1583,12 +2082,9 @@ with tab2:
                     gesetz = str(s.get("Gesetz_Status", "Normal")).strip()
                     abt = str(s.get("Abteilung", "Abteilung B")).strip()
 
-                    # ABTEILUNG F PRIORITÄT FÜR NACHTSCHICHTEN:
-                    # Wenn jemand NICHT auf Abteilung F ist, bekommt eine Nachtschicht eine kleine Zusatz-Gewichtung,
-                    # damit die KI für N1/N2 zuerst das Personal von Abteilung F einplant!
                     if abt != "Abteilung F":
                         for d in range(num_days):
-                            hour_deviations.append(is_night[(s["ID"], d)] * 4000)
+                            hour_deviations.append(is_night[(s["ID"], d)] * 4500)
 
                     if prev_month_last_day_night[s["ID"]]:
                         sl_v0 = model.NewBoolVar(f'sl_v0_{s["ID"]}')
@@ -1646,7 +2142,7 @@ with tab2:
                     for d in range(1, num_days - 1):
                         single_off = model.NewBoolVar(f'sing_off_{s["ID"]}_{d}')
                         model.AddMinEquality(single_off, [worked_day[(s["ID"], d-1)], work[(s["ID"], d, "OFF")], worked_day[(s["ID"], d+1)]])
-                        hour_deviations.append(single_off * 1500)
+                        hour_deviations.append(single_off * 1800)
 
                     week_limit_100 = 4000 if gesetz == "Mutterschutz (MSchG)" else 5000
                     for d in range(num_days - 6):
@@ -1695,12 +2191,12 @@ with tab2:
                         model.Add(sum(works_we) - 1 <= extra_we)
                         hour_deviations.append(extra_we * 60000)
 
-                for r in st.session_state.work_rules_v70:
+                for r in st.session_state.work_rules_v73:
                     if r["day"] < num_days:
                         hour_deviations.append(work[(r["emp_id"], r["day"], "OFF")] * 800000)
 
                 fixed_Set = set()
-                for fx in st.session_state.fixed_shifts_v70:
+                for fx in st.session_state.fixed_shifts_v73:
                     if fx["day"] < num_days and fx["shift"] in shifts:
                         fixed_Set.add((fx["emp_id"], fx["day"]))
                         hour_deviations.append((1 - work[(fx["emp_id"], fx["day"], fx["shift"])]) * 1800000)
@@ -1708,10 +2204,11 @@ with tab2:
                 dow_keys = ["MO", "DI", "MI", "DO", "FR", "SA", "SO"]
                 for s in staff_list:
                     allowed_shifts = resolve_allowed_shifts_for_person(s, SHIFTS_DF_CURRENT)
-                    for fx in st.session_state.fixed_shifts_v70:
-                        if fx["emp_id"] == s["ID"] and fx["shift"] in shifts and fx["shift"] not in allowed_shifts:
-                            if not (s["Rolle"] in ["DGKP", "Leitung"] and fx["shift"] == "N2"):
-                                allowed_shifts.append(fx["shift"])
+                    if s["Abteilung"] != "Abteilung F":
+                        for fx in st.session_state.fixed_shifts_v73:
+                            if fx["emp_id"] == s["ID"] and fx["shift"] in shifts and fx["shift"] not in allowed_shifts:
+                                if not (s["Rolle"] in ["DGKP", "Leitung"] and fx["shift"] == "N2"):
+                                    allowed_shifts.append(fx["shift"])
 
                     unallowed = [sh for sh in shifts.keys() if sh not in allowed_shifts]
                     spez_str = str(s.get("Spezialdienst", "Ohne")).strip()
@@ -1723,6 +2220,11 @@ with tab2:
                         
                         for sh in unallowed: 
                             model.Add(work[(s["ID"], d, sh)] == 0)
+
+                        if s["Abteilung"] == "Abteilung F":
+                            for sh_d in shifts.keys():
+                                if sh_d not in NIGHT_SHIFTS + ["OFF"]:
+                                    model.Add(work[(s["ID"], d, sh_d)] == 0)
 
                         if gesetz == "Mutterschutz (MSchG)":
                             for n_sh in NIGHT_SHIFTS:
@@ -1742,11 +2244,11 @@ with tab2:
                         
                         if s["Rolle"] == "Leitung" and (s["ID"], d) not in fixed_Set:
                             if dow >= 5 or is_holiday:
-                                has_muss = any(r["day"] == d and r["emp_id"] == s["ID"] for r in st.session_state.work_rules_v70)
+                                has_muss = any(r["day"] == d and r["emp_id"] == s["ID"] for r in st.session_state.work_rules_v73)
                                 if not has_muss:
                                     model.Add(work[(s["ID"], d, "OFF")] == 1)
                                 
-                        if s["Rolle"] == "DGKP" and (s["ID"], d) not in fixed_Set:
+                        if s["Rolle"] == "DGKP" and s["Abteilung"] != "Abteilung F" and (s["ID"], d) not in fixed_Set:
                             if dow >= 5 or is_holiday:
                                 if "X7" in allowed_shifts and "X7" in shifts:
                                     for sh in ["X4", "X6", "F2", "F7", "JED", "MS", "SM", "N2"]:
@@ -1761,9 +2263,25 @@ with tab2:
                         model.Add(sum(is_night[(s["ID"], d)] for d in range(num_days)) - max_n_val <= over_nacht)
                         hour_deviations.append(over_nacht * 50000)
 
-                for a in st.session_state.absences_v70:
+                # --- STUFE 1, 2 & 3: FIXE ABWESENHEITEN (URL, KRA, SU, FO, PFL, ENT, ZA) ---
+                for a in st.session_state.absences_v73:
                     if a["day"] < num_days: 
                         model.Add(work[(a["emp_id"], a["day"], "OFF")] == 1)
+                        # STUFE 2 BONUS FÜR ENT (Entlastungstag):
+                        # Wenn jemand ENT hat, versucht die KI aktiv, den Tag davor oder danach AUCH frei zu lassen (echter Erholungsblock!)
+                        if a["reason"] == "ENT":
+                            d_ent = a["day"]
+                            if d_ent > 0 and d_ent + 1 < num_days:
+                                isolated_ent = model.NewBoolVar(f'iso_ent_{a["emp_id"]}_{d_ent}')
+                                model.AddMinEquality(isolated_ent, [worked_day[(a["emp_id"], d_ent - 1)], worked_day[(a["emp_id"], d_ent + 1)]])
+                                hour_deviations.append(isolated_ent * 18000)
+
+                # --- STUFE 4: WUNSCH-FREI (WUN) MIT FAIREM KI-RICHTER BEI KOLLISIONEN ---
+                for w in st.session_state.wishes_v73:
+                    if w["day"] < num_days:
+                        # Hohe Priorität (55.000), damit Wünsche fast immer erfüllt werden,
+                        # ABER niedriger als Stations-Mindestbesetzung (95.000+), damit bei 5 gleichzeitigen Wünschen die Station nicht zusammenbricht!
+                        hour_deviations.append(worked_day[(w["emp_id"], w["day"])] * 55000)
 
                 for s in staff_list:
                     w_std = float(s.get("Wochenstd", 37.0))
@@ -1772,8 +2290,10 @@ with tab2:
                     saldo_alt = float(s.get("Saldo_Alt", 0.0))
                     gesetz = str(s.get("Gesetz_Status", "Normal")).strip()
                     
+                    # Nur bezahlte Abwesenheiten (URL, SU, ENT, KRA, PFLEGE, FO) reduzieren das zu arbeitende Stunden-Soll;
+                    # ZA (Zeitausgleich) reduziert das Soll NICHT, sondern baut dadurch aktiv das positive Saldo_Alt ab!
                     emp_paid_abs_days = sum(
-                        1 for a in st.session_state.absences_v70 
+                        1 for a in st.session_state.absences_v73 
                         if a["emp_id"] == s["ID"] and a["reason"] in PAID_ABSENCES
                     )
                     paid_abs_hours_100 = int(round(emp_paid_abs_days * daily_avg * 100))
@@ -1788,13 +2308,16 @@ with tab2:
                     model.Add(under_work >= adjusted_target - total_worked)
                     model.Add(over_work >= total_worked - adjusted_target)
                     
-                    hour_deviations.append(under_work * 260) 
+                    if s["Abteilung"] == "Abteilung F":
+                        hour_deviations.append(under_work * 80)
+                    else:
+                        hour_deviations.append(under_work * 260) 
+
                     if gesetz in ["Altersteilzeit (ATZ)", "Elternteilzeit (ETZ)", "Mutterschutz (MSchG)", "Pflegekarenz / Teilzeit"]:
                         hour_deviations.append(over_work * 300)
                     else:
                         hour_deviations.append(over_work * 12)
 
-                    # F2 / F7 Balance für PA & PFA (damit nicht einer nur 12h F2 und ein anderer nur 11h F7 macht)
                     if s["Rolle"] in ["Pflegeassistenz", "PFA"] and "F2" in shifts and "F7" in shifts:
                         f2_c = sum(work[(s["ID"], d, "F2")] for d in range(num_days))
                         f7_c = sum(work[(s["ID"], d, "F7")] for d in range(num_days))
@@ -1803,16 +2326,12 @@ with tab2:
                         model.Add(f_diff >= f7_c - f2_c - 4)
                         hour_deviations.append(f_diff * 1200)
 
-                # --- GRANULARE STATIONS-ABDECKUNG B, H & F (INKL. CROSS-COVERAGE POOL) ---
+                # --- STATIONS-ABDECKUNG B, H & F (INKL. HEIMHELFER JED-FIRST GESETZ) ---
                 day_sh = [sh for sh in DAY_CARE_SHIFTS if sh in shifts]
                 dgkp_shifts = [sh for sh in DGKP_DAY_SHIFTS if sh in shifts]
-                pa_shifts = [sh for sh in PA_PFA_DAY_SHIFTS if sh in shifts]
-                if not pa_shifts:
-                    pa_shifts = [sh for sh in ["F2", "F7"] if sh in shifts]
                 
                 o_dgkp_b = [s["ID"] for s in staff_list if s["Abteilung"] == "Abteilung B" and s["Rolle"] in ["DGKP", "Leitung"]]
                 o_dgkp_h = [s["ID"] for s in staff_list if s["Abteilung"] == "Abteilung H" and s["Rolle"] in ["DGKP", "Leitung"]]
-                o_dgkp_f = [s["ID"] for s in staff_list if s["Abteilung"] == "Abteilung F" and s["Rolle"] in ["DGKP", "Leitung"]]
                 o_dgkp_all = [s["ID"] for s in staff_list if s["Rolle"] in ["DGKP", "Leitung"]]
                 
                 o_pa_b = [s["ID"] for s in staff_list if s["Abteilung"] == "Abteilung B" and s["Rolle"] in ["Pflegeassistenz", "PFA"]]
@@ -1823,7 +2342,7 @@ with tab2:
                 o_hh_h = [s["ID"] for s in staff_list if s["Abteilung"] == "Abteilung H" and s["Rolle"] == "Heimhelfer"]
                 o_pa_hh_h = o_pa_h + o_hh_h
                 
-                o_pa_hh_f = [s["ID"] for s in staff_list if s["Abteilung"] == "Abteilung F" and s["Rolle"] in ["Pflegeassistenz", "PFA", "Heimhelfer"]]
+                o_hh_all = o_hh_b + o_hh_h
                 o_pa_night_all = [s["ID"] for s in staff_list if s["Rolle"] in ["Pflegeassistenz", "PFA"]]
                 
                 b_shorts, h_shorts, jed_shorts, dg_shorts, n1_shorts, n2_shorts = {}, {}, {}, {}, {}, {}
@@ -1831,47 +2350,54 @@ with tab2:
                 min_h_req = int(st.session_state.target_min_h)
 
                 for d in range(num_days):
-                    # 1. ABTEILUNG B: Mindestens 1 Heimhelfer (JED) + 4 bis 5 PA/PFA + 1 DGKP
-                    if "JED" in shifts:
-                        jed_b = sum(work[(e, d, "JED")] for e in o_pa_hh_b)
-                    else:
-                        jed_b = sum(work[(e, d, sh)] for e in o_hh_b for sh in day_sh)
-                    jed_short = model.NewIntVar(0, 10, f'jed_short_{d}')
-                    model.Add(jed_b + jed_short >= 1)
-                    hour_deviations.append(jed_short * 110000)
-                    jed_shorts[d] = jed_short
+                    # 1. HEIMHELFER-REGEL: ZUERST SPEISESAAL (JED), ERST DANACH PFLEGE-HILFE!
+                    if "JED" in shifts and len(o_hh_all) > 0:
+                        jed_total = sum(work[(e, d, "JED")] for e in o_hh_all)
+                        model.Add(jed_total <= 1)
+                        jed_covered = model.NewBoolVar(f'jed_cov_{d}')
+                        model.Add(jed_total == 1).OnlyEnforceIf(jed_covered)
+                        model.Add(jed_total == 0).OnlyEnforceIf(jed_covered.Not())
+                        
+                        jed_short = model.NewIntVar(0, 1, f'jed_short_{d}')
+                        model.Add(jed_short == 1 - jed_covered)
+                        hour_deviations.append(jed_short * 380000)
+                        jed_shorts[d] = jed_short
 
-                    # PA/PFA (und zusätzliche HH in Pflege-Tagdiensten) auf Abteilung B:
+                        for e_hh in o_hh_all:
+                            for sh_care in day_sh:
+                                model.Add(work[(e_hh, d, sh_care)] <= jed_covered)
+                                hour_deviations.append(work[(e_hh, d, sh_care)] * 2500)
+                    else:
+                        jed_short = model.NewIntVar(0, 1, f'jed_short_{d}')
+                        model.Add(jed_short == 0)
+                        jed_shorts[d] = jed_short
+
+                    # 2. ABTEILUNG B: 4 bis 5 PA/PFA (+ evtl. zusätzliche HH als Pflege-Hilfe)
                     b_care_day = sum(work[(e, d, sh)] for e in o_pa_hh_b for sh in day_sh)
                     b_short = model.NewIntVar(0, 10, f'b_short_{d}')
                     model.Add(b_care_day + b_short >= min_b_req)
-                    hour_deviations.append(b_short * 90000)
+                    hour_deviations.append(b_short * 95000)
                     b_shorts[d] = b_short
 
-                    # Ziel-Bonus für 5. PA/PFA auf Abteilung B (damit B auf 4 bis 5 PA/PFA kommt!)
                     b_ideal_5 = model.NewIntVar(0, 5, f'b_ideal5_{d}')
                     model.Add(b_care_day + b_ideal_5 >= max(min_b_req, 5))
                     hour_deviations.append(b_ideal_5 * 22000)
 
-                    # 2. ABTEILUNG H: Mindestens 4 PA/PFA/HH im Tagdienst
+                    # 3. ABTEILUNG H: Mindestens 4 PA/PFA/HH im Tagdienst
                     h_care_day = sum(work[(e, d, sh)] for e in o_pa_hh_h for sh in day_sh)
-                    f_care_day = sum(work[(e, d, sh)] for e in o_pa_hh_f for sh in day_sh)
-                    
                     h_own_short = model.NewIntVar(0, 10, f'h_own_short_{d}')
                     model.Add(h_care_day + h_own_short >= min_h_req)
-                    hour_deviations.append(h_own_short * 55000)
+                    hour_deviations.append(h_own_short * 75000)
 
-                    # Hausweiter Pflege-Pool (B + H + F): Wenn H unterbesetzt ist, plant B automatisch eine 5./6. Kraft als Springer für H ein!
-                    house_care_tot = b_care_day + h_care_day + f_care_day
+                    house_care_tot = b_care_day + h_care_day
                     house_care_short = model.NewIntVar(0, 15, f'house_care_short_{d}')
                     model.Add(house_care_tot + house_care_short >= min_b_req + min_h_req)
-                    hour_deviations.append(house_care_short * 140000)
+                    hour_deviations.append(house_care_short * 150000)
                     h_shorts[d] = house_care_short
 
-                    # 3. DGKP AUF B & H (inkl. Tagdienst-Unterstützung von F-DGKPs!)
+                    # 4. DGKP IM TAGDIENST (Nur aus B & H!)
                     b_dgkp = sum(work[(e, d, sh)] for e in o_dgkp_b for sh in dgkp_shifts)
                     h_dgkp = sum(work[(e, d, sh)] for e in o_dgkp_h for sh in dgkp_shifts)
-                    f_dgkp = sum(work[(e, d, sh)] for e in o_dgkp_f for sh in dgkp_shifts)
                     
                     b_dg_miss = model.NewIntVar(0, 1, f'b_dg_miss_{d}')
                     model.Add(b_dgkp + b_dg_miss >= 1)
@@ -1882,13 +2408,13 @@ with tab2:
                     hour_deviations.append(h_dg_miss * 220000)
                     
                     dg_tot = model.NewIntVar(0, 15, f'dg_tot_{d}')
-                    model.Add(dg_tot == b_dgkp + h_dgkp + f_dgkp)
+                    model.Add(dg_tot == b_dgkp + h_dgkp)
                     dg_short = model.NewIntVar(0, 10, f'dg_short_{d}')
                     model.Add(dg_tot + dg_short >= 2)
                     hour_deviations.append(dg_short * 320000)
                     dg_shorts[d] = dg_short
                     
-                    # 4. HARTE NACHT-SPERRE: NIEMALS 2 DGKP IN DER NACHT!
+                    # 5. HARTE NACHT-SPERRE: NIEMALS 2 DGKP IN DER NACHT!
                     if "N2" in shifts:
                         for e_dg in o_dgkp_all:
                             model.Add(work[(e_dg, d, "N2")] == 0)
@@ -1897,14 +2423,14 @@ with tab2:
                     model.Add(dgkp_night_sum <= 1)
                     n1_short = model.NewIntVar(0, 1, f'n1_short_{d}')
                     model.Add(dgkp_night_sum + n1_short >= 1)
-                    hour_deviations.append(n1_short * 250000)
+                    hour_deviations.append(n1_short * 260000)
                     n1_shorts[d] = n1_short
                     
                     pa_night_sum = sum(is_night[(e, d)] for e in o_pa_night_all)
                     model.Add(pa_night_sum <= 1)
                     n2_short = model.NewIntVar(0, 1, f'n2_short_{d}')
                     model.Add(pa_night_sum + n2_short >= 1)
-                    hour_deviations.append(n2_short * 250000)
+                    hour_deviations.append(n2_short * 260000)
                     n2_shorts[d] = n2_short
 
                 model.Minimize(sum(hour_deviations))
@@ -1915,6 +2441,7 @@ with tab2:
 
                 if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
                     data = []
+                    wish_set_lookup = {(w["emp_id"], w["day"]) for w in st.session_state.wishes_v73}
                     for s in staff_list:
                         qual_str = f" ({s['Qualifikation']})" if s.get('Qualifikation', 'Keine') != "Keine" else ""
                         row = {
@@ -1928,11 +2455,15 @@ with tab2:
                             for sh in shifts.keys():
                                 if solver.Value(work[(s["ID"], d, sh)]) == 1:
                                     val = sh if sh != "OFF" else "..."
-                                    for a in st.session_state.absences_v70:
+                                    for a in st.session_state.absences_v73:
                                         if a["emp_id"] == s["ID"] and a["day"] == d: 
-                                            if "WUNSCH" in a["reason"]: val = "WUNSCH"
-                                            elif "MUSS" in a["reason"]: val = "MUSS"
-                                            else: val = a["reason"]
+                                            val = a["reason"]
+                                    if (s["ID"], d) in wish_set_lookup:
+                                        if sh == "OFF":
+                                            val = "WUNSCH"
+                                        else:
+                                            # Falls ein Wunsch wegen Stations-Notfall überstimmt werden musste, mit '*' markieren
+                                            val = f"*{sh}"
                             row[day_str] = val
                         
                         row["SOLL"] = 0.0
@@ -1943,85 +2474,56 @@ with tab2:
 
                     df_raw_plan = pd.DataFrame(data)
 
-                    # --- INTELLIGENTE SPRINGER-ZUWEISUNG ('➔ H' / '➔ B') ---
+                    # --- INTELLIGENTE SPRINGER-ZUWEISUNG ZWISCHEN B UND H ('➔ H' / '➔ B') ---
                     for d in range(num_days):
                         c = f"{d+1}."
-                        # 1. F-Abteilung Tagdienste automatisch auf B oder H zuweisen
                         b_dg_indices = df_raw_plan[
                             (df_raw_plan["Abteilung"] == "Abteilung B") &
                             (df_raw_plan["Rolle"].isin(["DGKP", "Leitung"])) &
-                            (df_raw_plan[c].isin(dgkp_shifts))
+                            (df_raw_plan[c].apply(extract_base_shift).isin(dgkp_shifts))
                         ].index.tolist()
                         h_dg_indices = df_raw_plan[
                             (df_raw_plan["Abteilung"] == "Abteilung H") &
                             (df_raw_plan["Rolle"].isin(["DGKP", "Leitung"])) &
-                            (df_raw_plan[c].isin(dgkp_shifts))
-                        ].index.tolist()
-                        f_dg_indices = df_raw_plan[
-                            (df_raw_plan["Abteilung"] == "Abteilung F") &
-                            (df_raw_plan["Rolle"].isin(["DGKP", "Leitung"])) &
-                            (df_raw_plan[c].isin(dgkp_shifts))
+                            (df_raw_plan[c].apply(extract_base_shift).isin(dgkp_shifts))
                         ].index.tolist()
 
                         b_dg_curr = len(b_dg_indices)
                         h_dg_curr = len(h_dg_indices)
 
-                        for f_idx in f_dg_indices:
-                            sh_v = df_raw_plan.at[f_idx, c]
-                            if h_dg_curr == 0:
-                                df_raw_plan.at[f_idx, c] = f"{sh_v} ➔ H"
-                                h_dg_curr += 1
-                            elif b_dg_curr == 0:
-                                df_raw_plan.at[f_idx, c] = f"{sh_v} ➔ B"
-                                b_dg_curr += 1
-                            elif h_dg_curr < b_dg_curr:
-                                df_raw_plan.at[f_idx, c] = f"{sh_v} ➔ H"
-                                h_dg_curr += 1
-                            else:
-                                df_raw_plan.at[f_idx, c] = f"{sh_v} ➔ B"
-                                b_dg_curr += 1
-
-                        # 2. DGKP-Aushilfe zwischen B und H (falls H keine eigene DGKP hat und B >= 2 hat, oder umgekehrt)
                         if h_dg_curr == 0 and len(b_dg_indices) >= 2:
                             chosen_idx = b_dg_indices[-1]
-                            sh_v = df_raw_plan.at[chosen_idx, c]
+                            sh_v = extract_base_shift(df_raw_plan.at[chosen_idx, c])
                             df_raw_plan.at[chosen_idx, c] = f"{sh_v} ➔ H"
-                            h_dg_curr += 1
-                            b_dg_curr -= 1
                         elif b_dg_curr == 0 and len(h_dg_indices) >= 2:
                             chosen_idx = h_dg_indices[-1]
-                            sh_v = df_raw_plan.at[chosen_idx, c]
+                            sh_v = extract_base_shift(df_raw_plan.at[chosen_idx, c])
                             df_raw_plan.at[chosen_idx, c] = f"{sh_v} ➔ B"
-                            b_dg_curr += 1
-                            h_dg_curr -= 1
 
-                        # 3. PA / PFA / Heimhelfer Aushilfe von B nach H (und umgekehrt)
                         b_care_indices = df_raw_plan[
                             (df_raw_plan["Abteilung"] == "Abteilung B") &
                             (df_raw_plan["Rolle"].isin(["Pflegeassistenz", "PFA", "Heimhelfer"])) &
-                            (df_raw_plan[c].isin(day_sh))
+                            (df_raw_plan[c].apply(extract_base_shift).isin(day_sh))
                         ].index.tolist()
                         h_care_indices = df_raw_plan[
                             (df_raw_plan["Abteilung"] == "Abteilung H") &
                             (df_raw_plan["Rolle"].isin(["Pflegeassistenz", "PFA", "Heimhelfer"])) &
-                            (df_raw_plan[c].isin(day_sh))
+                            (df_raw_plan[c].apply(extract_base_shift).isin(day_sh))
                         ].index.tolist()
 
                         b_c_count = len(b_care_indices)
                         h_c_count = len(h_care_indices)
 
-                        # Wenn H weniger als min_h_req (4) hat und B mehr als min_b_req (4) hat -> B schickt Hilfe nach H!
                         while h_c_count < min_h_req and b_c_count > min_b_req and b_care_indices:
                             helper_idx = b_care_indices.pop()
-                            sh_v = df_raw_plan.at[helper_idx, c]
+                            sh_v = extract_base_shift(df_raw_plan.at[helper_idx, c])
                             df_raw_plan.at[helper_idx, c] = f"{sh_v} ➔ H"
                             b_c_count -= 1
                             h_c_count += 1
 
-                        # Umgekehrt: Falls B weniger als min_b_req (4) hat und H mehr als min_h_req (4) hat -> H schickt Hilfe nach B!
                         while b_c_count < min_b_req and h_c_count > min_h_req and h_care_indices:
                             helper_idx = h_care_indices.pop()
-                            sh_v = df_raw_plan.at[helper_idx, c]
+                            sh_v = extract_base_shift(df_raw_plan.at[helper_idx, c])
                             df_raw_plan.at[helper_idx, c] = f"{sh_v} ➔ B"
                             h_c_count -= 1
                             b_c_count += 1
@@ -2064,7 +2566,7 @@ with tab2:
                     st.session_state.last_generated_df = final_df
                     final_df.to_csv(plan_autosave_path, index=False)
                     st.session_state.plan_editor_ver += 1
-                    st.success("🎉 Beste Dienstplan-Variante erfolgreich berechnet (inkl. automatischer Springer-Markierung '➔ H' / '➔ B')!")
+                    st.success("🎉 Dienstplan mit 4-Stufen Urlaubs-, ENT-, ZA- & Wunsch-Hierarchie erfolgreich berechnet!")
                     st.rerun()
                 else:
                     st.error("🚨 UNBEKANNTER FEHLER: Modell konnte nicht gelöst werden.")
@@ -2075,9 +2577,10 @@ with tab2:
         df_rezultat = st.session_state.last_generated_df
         
         st.info(
-            "✏️ **Live-Editor & Springer-Markierung aktiv:** \n"
-            "- Wenn jemand von Abteilung B auf H aushilft, steht in seiner Zelle grün umrandet **`F2 ➔ H`** (und auf H erscheint automatisch die Zeile **`🤝 Aushilfe von B / F`** mit dem Namen `⬅️ PA B-x (F2)`).\n"
-            "- Du kannst auch selbst jederzeit manuell z. B. `F2 ➔ H` oder `X7 ➔ B` in eine Zelle tippen!"
+            "✏️ **Live-Editor & 4-Stufen-Legende:** \n"
+            "- **`URL` / `KRA` / `SU` / `FO`:** 100% fixiert & bezahlt | **`ENT`:** Entlastungstag inkl. Block-Erholung | **`ZA`:** Zeitausgleich (baut Saldo ab).\n"
+            "- **`WUNSCH`:** Erfüllter Wunsch-Frei-Tag (Grün) | **`*F2` (mit Stern):** Wunsch-Frei musste wegen Stations-Mindestbesetzung überstimmt werden.\n"
+            "- **`F2 ➔ H` / `⬅️ Name`:** Stationsübergreifende Aushilfe zwischen B und H."
         )
         
         def style_cells(val, col_name):
@@ -2086,6 +2589,8 @@ with tab2:
                 if val == "...": style += "color: #b3b3b3; text-align: center; " 
                 elif "🚨" in val: style += "background-color: #ffcccc; color: #cc0000; font-weight: bold; text-align: center; border: 2px solid red; " 
                 elif "⚠️" in val: style += "color: #cc0000; font-weight: bold; " 
+                elif val.startswith("*"):
+                    style += "background-color: #fff3cd; color: #856404; font-weight: bold; border: 2px solid #ffc107; text-align: center; "
                 elif "➔" in val or "⬅️" in val or "🤝" in val:
                     style += "background-color: #d4edda; color: #005c15; font-weight: bold; border: 2px solid #28a745; text-align: center; border-radius: 4px; "
                 elif "Wundmanager" in val or "Praxisanleiter" in val: style += "font-weight: bold; color: #0056b3; "
@@ -2147,13 +2652,12 @@ with tab2:
                     key=f"editor_{dept_key}_{st.session_state.plan_editor_ver}"
                 )
             
-            # Nur reale Mitarbeiter-Zeilen vergleichen und zurückschreiben
             real_mask_sub = ~sub_df["Mitarbeiter"].astype(str).str.startswith("🤝 Aushilfe")
             if not edited_sub.loc[real_mask_sub.values, day_cols_only].equals(display_df.loc[real_mask_sub.values, day_cols_only]):
                 full_updated = df_rezultat.copy()
                 real_indices = sub_df[real_mask_sub].index
                 full_updated.loc[real_indices, day_cols_only] = edited_sub.loc[real_mask_sub.values, day_cols_only].values
-                recalculated_full = recalculate_plan_df(full_updated, st.session_state.staff_df_v70, num_days)
+                recalculated_full = recalculate_plan_df(full_updated, st.session_state.staff_df_v73, num_days)
                 st.session_state.last_generated_df = recalculated_full
                 recalculated_full.to_csv(plan_autosave_path, index=False)
                 st.session_state.plan_editor_ver += 1
@@ -2187,15 +2691,14 @@ with tab2:
             rename_map = {}
             for col in geocon_df.columns:
                 if col.replace('.', '').isdigit():
-                    # Für Geocon-Import den reinen Schichtcode ohne '➔ H' exportieren
-                    geocon_df[col] = geocon_df[col].apply(lambda v: extract_base_shift(v) if "➔" in str(v) else v)
+                    geocon_df[col] = geocon_df[col].apply(lambda v: extract_base_shift(v) if ("➔" in str(v) or str(v).startswith("*")) else v)
                     d = int(col.replace('.', ''))
                     date_str = f"{d:02d}.{monat:02d}.{jahr}"
                     rename_map[col] = date_str
             geocon_df = geocon_df.rename(columns=rename_map)
             return geocon_df.to_csv(index=False, sep=";").encode('utf-8-sig')
 
-        st.subheader("🔵 Dienstplan: Abteilung B (Ziel: 4–5 PA/PFA + 1 HH JED + 1 DGKP)")
+        st.subheader("🔵 Dienstplan: Abteilung B (Ziel: 4–5 PA/PFA + 1 HH zuerst für JED + 1 DGKP)")
         df_b = render_editable_dept("Abteilung B", "abt_b")
         st.download_button(
             label="📥 Abt. B herunterladen", 
@@ -2215,7 +2718,7 @@ with tab2:
         )
         st.divider()
 
-        st.subheader("🟣 Dienstplan: Abteilung F (Nachtpool N1/N2 & Tag-Flex für DGKP)")
+        st.subheader("🟣 Dienstplan: Abteilung F (Exklusiv Nachtpool N1 / N2)")
         df_f = render_editable_dept("Abteilung F", "abt_f")
         st.download_button(
             label="📥 Abt. F herunterladen", 
@@ -2234,8 +2737,134 @@ with tab2:
             type="primary"
         )
 
+with tab_print:
+    st.header("🖨️ 6. Geocon & Druck-Studio (Aushangplan, Lohnarten-Matrix & Monatsabschluss)")
+    if "last_generated_df" in st.session_state:
+        df_plan_pr = st.session_state.last_generated_df
+        zuschlag_df = build_geocon_zuschlaege_df(
+            df_plan_pr, st.session_state.staff_df_v73, num_days, leto, mesec, first_day_of_month_weekday, at_holidays
+        )
+
+        st.subheader("1. 🖨️ Offizieller A4-Aushangplan (Schwarzes Brett) & Einzel-Stundennachweis")
+        col_pr1, col_pr2 = st.columns(2)
+        with col_pr1:
+            st.markdown(
+                "**📋 Komplett-Aushangplan (Abt. B, H & F in A4-Querformat):**\n"
+                "Enthält alle farbigen Schichten, Wochenend-/Feiertagsmarkierungen, Springer-Pfeile (`➔ H`), "
+                "Besetzungs-Checks und Unterschriftenfelder für WBL & PDL."
+            )
+            html_aushang = generate_printable_aushang_html(
+                df_plan_pr, num_days, leto, mesec, first_day_of_month_weekday, at_holidays,
+                st.session_state.target_min_b, st.session_state.target_min_h
+            )
+            st.download_button(
+                label="🖨️ Druckfertigen A4-Aushangplan herunterladen (.html / PDF-Druck)",
+                data=html_aushang.encode("utf-8"),
+                file_name=f"Aushangplan_{MONTH_NAMES_DE[mesec-1]}_{leto}.html",
+                mime="text/html",
+                type="primary",
+                use_container_width=True
+            )
+        with col_pr2:
+            st.markdown("**📄 Persönlicher Geocon Monats-Stundennachweis (Einzelblatt mit Unterschrift):**")
+            real_staff_list = zuschlag_df["Mitarbeiter"].tolist()
+            sel_emp_sheet = st.selectbox("Mitarbeiter für Einzel-Stundennachweis wählen:", real_staff_list)
+            if sel_emp_sheet:
+                emp_r_plan = df_plan_pr[df_plan_pr["Mitarbeiter"] == sel_emp_sheet].iloc[0]
+                emp_r_zu = zuschlag_df[zuschlag_df["Mitarbeiter"] == sel_emp_sheet].iloc[0]
+                html_single = generate_employee_stundenzettel_html(
+                    emp_r_plan, emp_r_zu, num_days, leto, mesec, first_day_of_month_weekday, at_holidays
+                )
+                st.download_button(
+                    label=f"📄 Stundennachweis für {sel_emp_sheet} herunterladen (.html / PDF)",
+                    data=html_single.encode("utf-8"),
+                    file_name=f"Stundennachweis_{sel_emp_sheet}_{mesec}_{leto}.html",
+                    mime="text/html",
+                    use_container_width=True
+                )
+
+        st.divider()
+
+        st.subheader("2. 💶 Geocon Lohnarten- & Zuschläge-Matrix (SWÖ-KV / Steiermark)")
+        st.dataframe(zuschlag_df, use_container_width=True, hide_index=True)
+        st.download_button(
+            label="📥 Geocon Lohnverrechnungs- & Zuschläge-Matrix als CSV exportieren",
+            data=zuschlag_df.to_csv(index=False, sep=";").encode("utf-8-sig"),
+            file_name=f"Geocon_Lohnmatrix_{mesec}_{leto}.csv",
+            mime="text/csv"
+        )
+
+        st.divider()
+
+        st.subheader("3. 🔄 Geocon 1-Klick Monatsabschluss (Salden- & Urlaubs-Übertrag ins Folgemonat)")
+        confirm_close = st.checkbox("✅ Ja, ich möchte den aktuellen Monat abschließen und Salden + Resturlaub in die Stammdaten übertragen.")
+        if st.button("🔄 Monatsabschluss jetzt durchführen (Saldo & Resturlaub fortschreiben)", disabled=not confirm_close, type="primary"):
+            df_team_upd = st.session_state.staff_df_v73.copy()
+            for _, z_row in zuschlag_df.iterrows():
+                base_n = str(z_row["Mitarbeiter"]).split(" (")[0].strip()
+                mask = df_team_upd["Name"].astype(str).str.strip() == base_n
+                if mask.any():
+                    df_team_upd.loc[mask, "Saldo_Alt"] = float(z_row["SALDO Neu (h)"])
+                    df_team_upd.loc[mask, "URL_Rest"] = float(z_row["🏝️ URL Rest Neu"])
+            df_team_upd = sanitize_team_df(df_team_upd)
+            st.session_state.staff_df_v73 = df_team_upd
+            df_team_upd.to_csv("team_data.csv", index=False)
+            st.session_state.team_editor_ver += 1
+            st.success("✅ Monatsabschluss erfolgreich! Alle Salden (`Saldo_Alt`) und Resturlaube (`URL_Rest`) wurden für das Folgemonat aktualisiert.")
+
+        st.divider()
+
+        st.subheader("4. 📋 Geocon Tages-Stecktafel (Live-Tagesbesetzung auf einen Blick)")
+        sel_steck_day = st.slider("Tag für die Tages-Stecktafel auswählen:", 1, num_days, 1)
+        c_steck = f"{sel_steck_day}."
+        real_only = df_plan_pr[~df_plan_pr["Mitarbeiter"].astype(str).str.contains("X-Oseba|FEHLT|⚠️|🤝 Aushilfe", na=False)]
+
+        b_day_list, h_day_list, speis_list, night_list, abs_list = [], [], [], [], []
+        for _, r in real_only.iterrows():
+            emp_n = str(r["Mitarbeiter"])
+            emp_r = str(r["Rolle"])
+            emp_a = str(r["Abteilung"])
+            val_c = str(r[c_steck]).strip().upper()
+            base_s = extract_base_shift(val_c)
+
+            if val_c == "...":
+                continue
+            if base_s in NIGHT_SHIFTS:
+                night_list.append(f"🌙 **{emp_n}** ({emp_r} – `{val_c}`)")
+            elif base_s == "JED":
+                speis_list.append(f"🍽️ **{emp_n}** (`JED` Speisesaal)")
+            elif base_s in DAY_CARE_SHIFTS:
+                target_a = "Abteilung H" if "➔ H" in val_c else ("Abteilung B" if "➔ B" in val_c else emp_a)
+                badge = f" *(🤝 Aushilfe von {emp_a})*" if "➔" in val_c else ""
+                entry_str = f"• **{emp_n}** ({emp_r} – `{base_s}`){badge}"
+                if target_a == "Abteilung B":
+                    b_day_list.append(entry_str)
+                else:
+                    h_day_list.append(entry_str)
+            else:
+                abs_list.append(f"• {emp_n}: `{val_c}`")
+
+        st_c1, st_c2, st_c3, st_c4 = st.columns(4)
+        with st_c1:
+            st.markdown(f"**🔵 Abt. B Tag ({len(b_day_list)})**")
+            st.markdown("\n".join(b_day_list) if b_day_list else "*Niemand eingeteilt*")
+            st.markdown("---")
+            st.markdown(f"**🍽️ Speisesaal JED ({len(speis_list)})**")
+            st.markdown("\n".join(speis_list) if speis_list else "🚨 *JED unbesetzt!*")
+        with st_c2:
+            st.markdown(f"**🟢 Abt. H Tag ({len(h_day_list)})**")
+            st.markdown("\n".join(h_day_list) if h_day_list else "*Niemand eingeteilt*")
+        with st_c3:
+            st.markdown(f"**🟣 Nachtdienst ({len(night_list)})**")
+            st.markdown("\n".join(night_list) if night_list else "🚨 *Nacht unbesetzt!*")
+        with st_c4:
+            st.markdown(f"**🏝️ Abwesend / Frei-Wunsch ({len(abs_list)})**")
+            st.markdown("\n".join(abs_list) if abs_list else "*Keine Abwesenheiten*")
+    else:
+        st.info("Bitte berechne zuerst in Tab 5 einen Dienstplan, um das Geocon & Druck-Studio zu nutzen!")
+
 with tab4:
-    st.header("🚨 6. SOS Einspringer-Finder & 🔄 Smart-Tauschbörse")
+    st.header("🚨 7. SOS Einspringer-Finder & 🔄 Smart-Tauschbörse")
     if "last_generated_df" in st.session_state:
         df_plan = st.session_state.last_generated_df
         staff_names = df_plan[~df_plan["Mitarbeiter"].str.contains("X-Oseba|FEHLT|⚠️|🤝 Aushilfe", na=False)]["Mitarbeiter"].tolist()
@@ -2261,13 +2890,17 @@ with tab4:
             
         if st.button("🔍 Ersatzpersonen suchen", type="primary"):
             kandidaten = []
+            base_out_sh = extract_base_shift(aktuelle_schicht)
             for _, r in df_plan.iterrows():
                 m_name = r["Mitarbeiter"]
                 m_rolle = r["Rolle"]
+                m_abt = r["Abteilung"]
                 m_schicht = r[tag_col]
                 m_saldo = r["SALDO"]
                 
                 if any(k in m_name for k in ["X-Oseba", "FEHLT", "⚠️", "🤝 Aushilfe"]): 
+                    continue
+                if m_abt == "Abteilung F" and base_out_sh not in NIGHT_SHIFTS:
                     continue
                 
                 if m_name != ausfall_emp and m_schicht == "...":
@@ -2328,9 +2961,9 @@ with tab4:
                 df_test.at[idx_a, swap_col] = sh_b
                 df_test.at[idx_b, swap_col] = sh_a
                 
-                df_test = recalculate_plan_df(df_test, st.session_state.staff_df_v70, num_days)
+                df_test = recalculate_plan_df(df_test, st.session_state.staff_df_v73, num_days)
                 audit_after = run_austrian_law_audit(
-                    df_test, st.session_state.staff_df_v70, SHIFTS_DF_CURRENT, num_days, leto, mesec, first_day_of_month_weekday, at_holidays,
+                    df_test, st.session_state.staff_df_v73, SHIFTS_DF_CURRENT, num_days, leto, mesec, first_day_of_month_weekday, at_holidays,
                     st.session_state.target_min_b, st.session_state.target_min_h
                 )
                 relevant_issues = pd.DataFrame()
@@ -2338,7 +2971,7 @@ with tab4:
                     relevant_issues = audit_after[
                         audit_after["Betroffen"].str.contains(swap_emp_a.split(" (")[0], na=False) |
                         audit_after["Betroffen"].str.contains(swap_emp_b.split(" (")[0], na=False) |
-                        audit_after["Betroffen"].str.contains("Nachtdienst", na=False)
+                        audit_after["Betroffen"].str.contains("Nachtdienst|Speisesaal", na=False)
                     ]
                 
                 st.session_state.last_generated_df = df_test
@@ -2353,16 +2986,30 @@ with tab4:
         st.info("Bitte berechne zuerst den Dienstplan!")
 
 with tab5:
-    st.header("📉 7. Überstunden-, Fairness- & Urlaubs-Radar")
+    st.header("📉 8. Überstunden-, Fairness- & Wunsch-Erfüllungs-Radar")
     if "last_generated_df" in st.session_state:
         df_plan = st.session_state.last_generated_df
         real_df = df_plan[~df_plan["Mitarbeiter"].str.contains("X-Oseba|FEHLT|⚠️|🤝 Aushilfe", na=False)].copy()
         day_cols_only = [f"{d}." for d in range(1, num_days + 1) if f"{d}." in real_df.columns]
         
-        c1, c2, c3 = st.columns(3)
+        # Gesamte Wunsch-Erfüllungsquote berechnen
+        wun_granted_total = 0
+        wun_overruled_total = 0
+        for _, r in real_df.iterrows():
+            for c in day_cols_only:
+                v_c = str(r[c]).strip().upper()
+                if v_c == "WUNSCH":
+                    wun_granted_total += 1
+                elif v_c.startswith("*"):
+                    wun_overruled_total += 1
+        wun_all = wun_granted_total + wun_overruled_total
+        wun_pct = (wun_granted_total / wun_all * 100.0) if wun_all > 0 else 100.0
+
+        c1, c2, c3, c4 = st.columns(4)
         c1.metric("Gesamte SOLL-Stunden", f"{real_df['SOLL'].sum():.1f} h")
         c2.metric("Gesamte IST-Stunden", f"{real_df['IST'].sum():.1f} h")
         c3.metric("Aufgebaute Überstunden", f"{real_df['ÜBERSTD.'].sum():.1f} h")
+        c4.metric("🟢 Wunsch-Erfüllungsquote", f"{wun_pct:.1f} % ({wun_granted_total}/{wun_all})")
         
         radar_rows = []
         for _, r in real_df.iterrows():
@@ -2372,6 +3019,8 @@ with tab5:
             long_12h = sum(1 for v in vals if SHIFTS_HUNDREDTHS.get(v, 0) >= 1200 and v not in NIGHT_SHIFTS)
             springer_count = sum(1 for v in raw_vals if "➔" in v)
             url_month = sum(1 for v in raw_vals if v == "URL")
+            ent_za_month = sum(1 for v in raw_vals if v in ["ENT", "ZA"])
+            wun_ok = sum(1 for v in raw_vals if v == "WUNSCH")
             we_days_worked = 0
             for d_idx, v in enumerate(vals):
                 dow = (d_idx + first_day_of_month_weekday) % 7
@@ -2393,20 +3042,22 @@ with tab5:
                 "WE-Tage (Sa/So)": we_days_worked,
                 "12h-Tagdienste": long_12h,
                 "Nächte": n_count,
-                "Springer-Einsätze (➔)": springer_count,
-                "URL (Monat)": url_month,
+                "Springer (➔)": springer_count,
+                "URL": url_month,
+                "ENT / ZA": ent_za_month,
+                "Wünsche erfüllt": wun_ok,
                 "Burnout-Index": f"{load_score}%",
                 "Belastungs-Status": status_ampel
             })
             
         radar_df = pd.DataFrame(radar_rows)
-        st.subheader("⚖️ KI Fairness-, Springer- & Belastungs-Radar pro Mitarbeiter")
+        st.subheader("⚖️ KI Fairness-, Urlaubs-, Wunsch- & Belastungs-Radar pro Mitarbeiter")
         st.dataframe(radar_df.sort_values(by="ÜBERSTD.", ascending=False), use_container_width=True, hide_index=True)
     else:
         st.info("Bitte berechne zuerst den Dienstplan, um die Analyse zu sehen!")
 
 with tab6:
-    st.header("🛡️ 8. Steiermark Pflege- & Arbeitsrechts-Kompendium + Live-Inspektorat")
+    st.header("🛡️ 9. Steiermark Pflege- & Arbeitsrechts-Kompendium + Live-Inspektorat")
     col_law1, col_law2 = st.columns(2)
     with col_law1:
         with st.expander("🤰 1. Mutterschutzgesetz (MSchG §§ 3–8)", expanded=True):
@@ -2426,7 +3077,8 @@ with tab6:
             st.markdown(
                 "- **StPAVO Personalschlüssel:** Stufe 0: 1:24 | Stufe 1: 1:12 | Stufe 2: 1:7,5 | Stufe 3: 1:4 | Stufe 4: 1:2,5 | Stufe 5: 1:2 | Stufe 6 & 7: 1:1,5.\n"
                 "- **Qualifikations-Mix:** Mindestens **20 % DGKP**, ca. **60 % PFA & PA** (Gesamt-Pflegepersonal mind. **80 %**), maximal **20 % Heimhilfe (HH)**.\n"
-                "- **Nachtdienst-Vorgabe:** Hausweit **exakt 1x DGKP (`N1`) + 1x PFA/PA (`N2`)**."
+                "- **Heimhelfer-Regel:** Zuerst muss täglich der Speisesaal (`JED`) besetzt sein, bevor ein weiterer Heimhelfer in der Pflege (`F2`/`F7`) unterstützt.\n"
+                "- **Nachtdienst-Vorgabe:** Hausweit **exakt 1x DGKP (`N1`) + 1x PFA/PA (`N2`)** (Abt. F deckt exklusiv die Nacht ab)."
             )
 
     with col_law2:
@@ -2444,10 +3096,11 @@ with tab6:
                 "- **Pflegeassistenz (PA - § 83 GuKG):** Durchführung standardisierter Pflegemaßnahmen unter Anordnung und Aufsicht.\n"
                 "- **Fortbildungspflicht (§ 63 & § 104c GuKG):** **60 Stunden** / 5 Jahre für **DGKP**; **40 Stunden** / 5 Jahre für **PFA & PA** (im Kalender mit `FO` buchbar)."
             )
-        with st.expander("🌙 6. Nachtschwerarbeitsgesetz (NSchG) & Pflegefreistellung (UrlG/AVRAG)", expanded=True):
+        with st.expander("🌙 6. Nachtschwerarbeitsgesetz (NSchG) & Urlaubs-/Entlastungs-Regeln (UrlG)", expanded=True):
             st.markdown(
-                "- **NSchG-Zusatzurlaub (Art. XI NSchG):** Ab 50 geleisteten Nachtschwerarbeits-Diensten pro Jahr gebühren **2 zusätzliche Urlaubstage**.\n"
-                "- **Pflegefreistellung (§ 16 UrlG):** Anspruch auf bezahlte Freistellung bis zu **1 regelmäßigen Wochenarbeitszeit** pro Arbeitsjahr."
+                "- **NSchG-Zusatzurlaub / Entlastungstage (`ENT`):** Ab 50 geleisteten Nachtschwerarbeits-Diensten pro Jahr gebühren **2 zusätzliche Urlaubstage** (`ENT`). Im System werden `ENT`-Tage bevorzugt im Block mit freien Tagen geplant.\n"
+                "- **Zeitausgleich (`ZA`):** Reduziert aktiv das aufgebaute Überstunden-Saldo (`Saldo_Alt`), ohne die monatliche IST-Arbeitszeit künstlich zu erhöhen.\n"
+                "- **Urlaubs-Kontingent:** Maximal **2 Mitarbeiter pro Station (B/H)** gleichzeitig (davon max. 1 DGKP, max. 1 HH hausweit, max. 1 im Nachtpool F)."
             )
 
     st.divider()
@@ -2456,7 +3109,7 @@ with tab6:
     if "last_generated_df" in st.session_state:
         audit_df = run_austrian_law_audit(
             st.session_state.last_generated_df, 
-            st.session_state.staff_df_v70, 
+            st.session_state.staff_df_v73, 
             SHIFTS_DF_CURRENT,
             num_days, leto, mesec, first_day_of_month_weekday, at_holidays,
             st.session_state.target_min_b, st.session_state.target_min_h
@@ -2464,7 +3117,7 @@ with tab6:
         if audit_df.empty:
             st.success(
                 "✅ **100% ZERTIFIZIERT & GESETZESTREU (Steiermark-Standard)!** Der aktuelle Dienstplan erfüllt alle Vorgaben: "
-                "Maximal 1 DGKP in der Nacht, 2 freie Tage nach Nachtblock, Mutterschutz (MSchG), Altersteilzeit (ATZ) und StPAVO-Besetzung."
+                "Abt. F exklusiv Nacht, Heimhelfer zuerst JED dann Pflege, max. 1 DGKP in der Nacht, 2 freie Tage nach Nachtblock und StPAVO-Besetzung."
             )
         else:
             st.warning(f"⚠️ **Hinweis:** Bei der Überprüfung wurden **{len(audit_df)} Abweichungen / Hinweise** gefunden:")
